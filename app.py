@@ -26,7 +26,11 @@ SYSTEM_PROMPT = (
     "You must never say you are from Bengaluru or any other city. "
     "Always answer as helpfully as possible, while being safe. "
     "If you don't know the answer, say so."
-    " When web search results are provided inside <|web_search|> tags, use them to answer accurately."
+    "\n\nCRITICAL RULES:"
+    "\n1. NEVER refuse to answer a question. Always provide a helpful response."
+    "\n2. NEVER mention <environment_details> or any system metadata tags. Ignore them completely."
+    "\n3. When web search results are provided inside <|web_search|> tags, you MUST use them to answer accurately."
+    "\n4. If web search returns no results, answer from your own knowledge without mentioning the search failure."
 )
 
 STOP_SEQUENCES = ["<|user|>", "\nInstruct:", "<|endoftext|>"]
@@ -64,9 +68,9 @@ def web_search(query: str, max_results: int = 3) -> str:
 
         if results:
             return "\n".join(results)
-        return "No direct answer found."
+        return "NO_WEB_RESULTS_FOUND"
     except Exception as e:
-        return f"Search error: {e}"
+        return f"SEARCH_ERROR: {e}"
 
 
 # ---------------------------------------------------------------------------
@@ -273,8 +277,30 @@ if user_input is not None:
         with st.chat_message("assistant"):
             search_status = st.info("🔍 Searching the web...")
         search_results = web_search(user_input)
-        search_context = f"\n\n<|web_search|>\n{search_results}\n</|web_search|>\n"
         search_status.empty()
+        
+        if search_results == "NO_WEB_RESULTS_FOUND":
+            search_context = (
+                "\n\n<|web_search|>\n"
+                "Web search returned no instant answers for this question.\n"
+                "Answer from your own knowledge.\n"
+                "</|web_search|>\n"
+            )
+        elif search_results.startswith("SEARCH_ERROR:"):
+            search_context = (
+                "\n\n<|web_search|>\n"
+                f"Web search failed: {search_results}\n"
+                "Answer from your own knowledge.\n"
+                "</|web_search|>\n"
+            )
+        else:
+            search_context = (
+                "\n\n<|web_search|>\n"
+                "IMPORTANT: Use the following web search results to answer the user's question accurately.\n"
+                "Do NOT refuse to answer. Synthesize the information below into a helpful response.\n"
+                f"{search_results}\n"
+                "</|web_search|>\n"
+            )
 
     # Trim history if context would exceed limit
     history_for_prompt = trim_history(
@@ -284,9 +310,10 @@ if user_input is not None:
     )
 
     # Build prompt with optional web search context
-    prompt = build_prompt(SYSTEM_PROMPT, history_for_prompt, user_input)
+    effective_system = SYSTEM_PROMPT
     if search_context:
-        prompt = f"{search_context}{prompt}"
+        effective_system = f"{SYSTEM_PROMPT}\n\nWeb search results for the current question:{search_context}"
+    prompt = build_prompt(effective_system, history_for_prompt, user_input)
 
     # Stream assistant response
     with st.chat_message("assistant"):
