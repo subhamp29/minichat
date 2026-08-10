@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 import requests
@@ -28,10 +29,16 @@ SYSTEM_PROMPT = (
     "If you don't know the answer, say so."
     "\n\nCRITICAL RULES:"
     "\n1. NEVER refuse to answer a question. Always provide a helpful response."
-    "\n2. NEVER mention <environment_details> or any system metadata tags. Ignore them completely."
-    "\n3. When web search results are provided inside <|web_search|> tags, you MUST use them to answer accurately."
-    "\n4. If web search returns no results, answer from your own knowledge without mentioning the search failure."
+    "\n2. When web search results are provided inside <|web_search|> tags, you MUST use them to answer accurately."
+    "\n3. If web search returns no results, answer from your own knowledge without mentioning the search failure."
 )
+
+
+def clean_response(text: str) -> str:
+    """Remove leaked system metadata tags from model output."""
+    text = re.sub(r"<environment_details>.*?</environment_details>", "", text, flags=re.DOTALL)
+    text = re.sub(r"</?environment_details>", "", text)
+    return text.strip()
 
 STOP_SEQUENCES = ["<|user|>", "\nInstruct:", "<|endoftext|>"]
 
@@ -318,7 +325,7 @@ if user_input is not None:
     # Stream assistant response
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
-        clean_response = ""
+        raw_response = ""
         error_occurred = False
 
         for token in generate(model, prompt, temperature, DEFAULT_TOP_P, max_tokens_slider):
@@ -326,11 +333,12 @@ if user_input is not None:
                 error_occurred = True
                 st.error(token)
                 break
-            clean_response += token
-            message_placeholder.markdown(clean_response + "▌")
+            raw_response += token
+            message_placeholder.markdown(raw_response + "▌")
 
-        message_placeholder.markdown(clean_response)
+        final_response = clean_response(raw_response)
+        message_placeholder.markdown(final_response)
 
     # Save only clean, successful responses to history
     if not error_occurred:
-        st.session_state.messages.append({"role": "assistant", "content": clean_response})
+        st.session_state.messages.append({"role": "assistant", "content": final_response})
