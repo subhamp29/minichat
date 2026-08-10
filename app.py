@@ -36,8 +36,14 @@ SYSTEM_PROMPT = (
 
 def clean_response(text: str) -> str:
     """Remove leaked system metadata tags from model output."""
+    # Remove full environment_details blocks
     text = re.sub(r"<environment_details>.*?</environment_details>", "", text, flags=re.DOTALL)
+    # Remove any stray opening/closing tags
     text = re.sub(r"</?environment_details>", "", text)
+    # Remove common ChatGPT-style system tag patterns
+    text = re.sub(r"<system>.*?</system>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<\|im_start\|>.*?<\|im_end\|>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<\|im_sep\|>", "", text)
     return text.strip()
 
 STOP_SEQUENCES = ["<|user|>", "\nInstruct:", "<|endoftext|>"]
@@ -334,7 +340,8 @@ if user_input is not None:
                 st.error(token)
                 break
             raw_response += token
-            message_placeholder.markdown(raw_response + "▌")
+            # Clean in real-time so leaked tags never appear in the UI
+            message_placeholder.markdown(clean_response(raw_response) + "▌")
 
         final_response = clean_response(raw_response)
         message_placeholder.markdown(final_response)
