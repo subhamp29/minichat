@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+import requests
 import streamlit as st
 from huggingface_hub import hf_hub_download
 from llama_cpp import Llama
@@ -21,12 +22,52 @@ DEFAULT_TOP_P = 0.95
 MAX_TOKENS = 512
 
 SYSTEM_PROMPT = (
-    "You are a helpful, respectful and honest assistant. "
+    "You are a helpful, respectful and honest assistant owned by Subham Mahapatra from Odisha, India. "
+    "You must never say you are from Bengaluru or any other city. "
     "Always answer as helpfully as possible, while being safe. "
     "If you don't know the answer, say so."
+    " When web search results are provided inside <|web_search|> tags, use them to answer accurately."
 )
 
 STOP_SEQUENCES = ["<|user|>", "\nInstruct:", "<|endoftext|>"]
+
+
+def web_search(query: str, max_results: int = 3) -> str:
+    """Search the web using DuckDuckGo Instant Answer API (free, no key required)."""
+    try:
+        resp = requests.get(
+            "https://api.duckduckgo.com/",
+            params={"q": query, "format": "json", "no_html": 1},
+            timeout=10,
+        )
+        data = resp.json()
+
+        results = []
+
+        # Abstract/main answer
+        abstract = data.get("AbstractText") or data.get("Abstract")
+        if abstract:
+            results.append(f"Answer: {abstract}")
+
+        # Direct answer
+        answer = data.get("Answer")
+        if answer and answer not in ("", None):
+            results.append(f"Quick answer: {answer}")
+
+        # Related topics
+        related = data.get("RelatedTopics", [])[:max_results]
+        for topic in related:
+            if isinstance(topic, dict):
+                text = topic.get("Text") or topic.get("Abstract")
+                if text:
+                    results.append(f"- {text}")
+
+        if results:
+            return "\n".join(results)
+        return "No direct answer found."
+    except Exception as e:
+        return f"Search error: {e}"
+
 
 # ---------------------------------------------------------------------------
 # Page configuration
@@ -82,7 +123,12 @@ def load_model():
 # Session state
 # ---------------------------------------------------------------------------
 if "messages" not in st.session_state:
-    st.session_state.messages = []
+    st.session_state.messages = [
+        {
+            "role": "assistant",
+            "content": "Hello! I'm MiniChat, owned by Subham Mahapatra from Odisha. How can I help you today?"
+        }
+    ]
 
 # ---------------------------------------------------------------------------
 # Prompt construction
@@ -168,6 +214,14 @@ with st.sidebar:
     )
 
     st.divider()
+
+    web_search_enabled = st.toggle(
+        "🌐 Web Search",
+        value=False,
+        help="Search DuckDuckGo for real-time information",
+    )
+
+    st.divider()
     st.caption(f"**Model:** Phi-2 Q4_K_M")
     st.caption(f"**Context:** {N_CTX} tokens")
     st.caption(f"**Threads:** {N_THREADS}")
@@ -213,6 +267,15 @@ if user_input is not None:
     with st.chat_message("user"):
         st.text(user_input)
 
+    # Web search injection
+    search_context = ""
+    if web_search_enabled:
+        with st.chat_message("assistant"):
+            search_status = st.info("🔍 Searching the web...")
+        search_results = web_search(user_input)
+        search_context = f"\n\n<|web_search|>\n{search_results}\n</|web_search|>\n"
+        search_status.empty()
+
     # Trim history if context would exceed limit
     history_for_prompt = trim_history(
         st.session_state.messages[:-1],  # exclude current user msg
@@ -220,8 +283,10 @@ if user_input is not None:
         user_input,
     )
 
-    # Build prompt
+    # Build prompt with optional web search context
     prompt = build_prompt(SYSTEM_PROMPT, history_for_prompt, user_input)
+    if search_context:
+        prompt = f"{search_context}{prompt}"
 
     # Stream assistant response
     with st.chat_message("assistant"):
