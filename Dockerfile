@@ -27,8 +27,8 @@ RUN chmod +x entrypoint.sh
 EXPOSE 7860
 
 # Healthcheck: wait for Streamlit to respond
-HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=5 \
-  CMD curl -f http://localhost:7860/_stcore/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=5 \
+  CMD curl -f http://localhost:${PORT:-7860}/_stcore/health || exit 1
 
 # Run Streamlit via entrypoint script
 ENTRYPOINT ["/app/entrypoint.sh"]

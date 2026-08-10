@@ -5,4 +5,9 @@ set -e
 PORT_NUM=${PORT:-7860}
 
 echo "Starting Streamlit on port $PORT_NUM"
-exec streamlit run app.py --server.port=$PORT_NUM --server.address=0.0.0.0
+exec streamlit run app.py \
+  --server.port=$PORT_NUM \
+  --server.address=0.0.0.0 \
+  --server.headless=true \
+  --server.enableCORS=false \
+  --server.enableXsrfProtection=false
