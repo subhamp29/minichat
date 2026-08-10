@@ -20,12 +20,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application
 COPY . .
 
+# Make entrypoint executable
+RUN chmod +x entrypoint.sh
+
 # Expose the Streamlit port
 EXPOSE 7860
 
 # Healthcheck: wait for Streamlit to respond
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=5 \
-  CMD curl -f http://localhost:${PORT:-7860}/_stcore/health || exit 1
+  CMD curl -f http://localhost:7860/_stcore/health || exit 1
 
-# Run Streamlit (Railway sets $PORT automatically)
-CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0"]
+# Run Streamlit via entrypoint script
+ENTRYPOINT ["/app/entrypoint.sh"]
