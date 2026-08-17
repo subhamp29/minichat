@@ -1946,21 +1946,18 @@ if st.session_state.get("messages"):
 if "selected_model" not in st.session_state:
     st.session_state.selected_model = DEFAULT_MODEL_KEY
 
-# Track whether the startup router-env-var check has already run this session.
-# We only want to auto-fallback once; re-running it on every rerun causes
-# the selectbox widget and session state to ping-pong, which produces the
-# flickering loop reported for claude-opus-free.
-if "_startup_router_check_done" not in st.session_state:
-    st.session_state._startup_router_check_done = False
-
-# Startup check: verify router env vars if default model is remote.
-# Instead of crashing, auto-fallback to a local GGUF model so the app
-# always starts. Show a persistent notice so the user can configure
-# the router later or switch models manually.
-if (
-    not st.session_state._startup_router_check_done
-    and st.session_state.selected_model in MODEL_OPTIONS
-):
+# NOTE: We intentionally do NOT auto-switch st.session_state.selected_model
+# here anymore. Doing so on every rerun (even gated by a "done" flag) meant
+# that selecting a remote model, which itself triggers a rerun, immediately
+# got silently overwritten back to a local model before the selectbox could
+# redraw — visible to the user as the selector "flickering" back and forth.
+#
+# Instead: just show a non-destructive warning if the router isn't
+# configured for the currently selected remote model. The user's selection
+# is left alone. Actual failures are handled gracefully at send-time (see
+# the RouterConfigurationError / RouterError handling further below), which
+# already offers a one-click "Switch to local for this turn" button.
+if st.session_state.selected_model in MODEL_OPTIONS:
     model_cfg = MODEL_OPTIONS[st.session_state.selected_model]
     if model_cfg.get("backend") == "remote":
         missing = []
@@ -1969,22 +1966,15 @@ if (
         if not os.environ.get("ROUTER_API_KEY"):
             missing.append("ROUTER_API_KEY")
         if missing:
-            local_fallback_key = "Qwen2.5 0.5B (Q4_K_M) - Ultra Fast"
-            if local_fallback_key in MODEL_OPTIONS:
-                st.session_state.selected_model = local_fallback_key
-                st.session_state.fallback_notice = (
-                    f"⚠️ Router not configured (missing: {', '.join(missing)}). "
-                    f"Bhavyam AI automatically switched to '{local_fallback_key}'. "
-                    f"To use remote models, set {', '.join(missing)} in Railway → Settings → Variables."
-                )
-            else:
-                st.error(
-                    f"⚠️ Remote model '{st.session_state.selected_model}' is selected, "
-                    f"but the following environment variables are not set: {', '.join(missing)}. "
-                    f"Please configure them in your deployment dashboard (e.g., Railway → Settings → Variables)."
-                )
-                st.stop()
-    st.session_state._startup_router_check_done = True
+            st.session_state.fallback_notice = (
+                f"⚠️ Router not fully configured (missing: {', '.join(missing)}). "
+                f"'{st.session_state.selected_model}' will fail when you send a message. "
+                f"Set {', '.join(missing)} in Railway → Settings → Variables, or switch "
+                f"to a local model in the sidebar."
+            )
+        elif st.session_state.get("fallback_notice", "").startswith("⚠️ Router not fully configured"):
+            # Clear a stale router-missing notice once env vars are present.
+            st.session_state.fallback_notice = None
 
 if "last_error" not in st.session_state:
     st.session_state.last_error = None
@@ -2176,9 +2166,6 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.last_error = None
         st.session_state.last_user_input = None
-        # Reset the startup-check flag so the router-env-var guard runs again
-        # for the newly selected model (only once, then it locks).
-        st.session_state._startup_router_check_done = False
         st.rerun()
 
     st.caption(
@@ -2225,7 +2212,6 @@ with st.sidebar:
             st.session_state.messages = []
             st.session_state.last_error = None
             st.session_state.last_user_input = None
-            st.session_state._startup_router_check_done = False
             st.rerun()
         else:
             st.warning("Please enter both HuggingFace Repo ID and GGUF Filename.")
