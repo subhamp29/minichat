@@ -322,28 +322,42 @@ def create_new_chat():
 init_db()
 
 
+def _strip_environment_details(text: str) -> str:
+    """Remove everything between <environment_details> and </environment_details>.
+
+    Uses simple string splitting so it is immune to newlines, attributes,
+    capitalization variations, or regex flag gotchas.
+    """
+    result = []
+    i = 0
+    text_lower = text.lower()
+    while i < len(text):
+        start = text_lower.find("<environment_details", i)
+        if start == -1:
+            result.append(text[i:])
+            break
+        end = text_lower.find("</environment_details>", start)
+        if end == -1:
+            # Unclosed tag — discard from here to the end of text
+            break
+        # Keep text before the opening tag
+        result.append(text[i:start])
+        # Skip past the closing tag
+        i = end + len("</environment_details>")
+    return "".join(result)
+
+
 def clean_response(text: str) -> str:
     """Remove leaked system metadata tags from model output."""
-    # 1. Strip complete <environment_details>...</environment_details> blocks
-    text = re.sub(
-        r"(?is)<\s*environment_details\b[^>]*>.*?</\s*environment_details\s*>",
-        "",
-        text,
-        flags=re.DOTALL,
-    )
+    # 1. Strip <environment_details>...</environment_details> blocks
+    text = _strip_environment_details(text)
     # 2. Strip known system tag families
     text = re.sub(r"(?is)<\s*system\b[^>]*>.*?</\s*system\s*>", "", text, flags=re.DOTALL)
     text = re.sub(r"<\|im_start\|>.*?<\|im_end\|>", "", text, flags=re.DOTALL)
     text = re.sub(r"<\|im_sep\|>", "", text)
     text = re.sub(r"(?is)<\s*/\s*im_\w+\s*>", "", text)
     text = re.sub(r"<\|[^|]*\|>", "", text)
-    text = re.sub(
-        r"</?\b(environment_details|system|start_header_id|end_header_id|eot_id|end_of_text)\b[^>]*>",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    )
-    # 3. Strip image-read errors and tool errors that leak from external processes
+    # 3. Strip image-read errors
     text = re.sub(
         r"(?i)^ERROR:\s*Cannot read\s*['\"][^'\"]+['\"].*$",
         "",
@@ -360,12 +374,7 @@ def clean_response(text: str) -> str:
             "working directory:",
             "workspace root folder:",
             "environment_details",
-            "cwd:",
-            "os:",
-            "python version:",
-            "cpu cores:",
             "open tabs:",
-            "<|im_",
             "cannot read",
         ]):
             continue
@@ -379,7 +388,6 @@ def clean_response(text: str) -> str:
         "current time:",
         "working directory:",
         "workspace root folder:",
-        "<|im_",
     ]):
         return "I cannot provide that answer."
     # 6. Collapse excess blank lines
@@ -389,24 +397,14 @@ def clean_response(text: str) -> str:
 
 def _clean_error(text: str) -> str:
     """Remove leaked metadata from error messages."""
-    # 1. Strip complete <environment_details>...</environment_details> blocks
-    text = re.sub(
-        r"(?is)<\s*environment_details\b[^>]*>.*?</\s*environment_details\s*>",
-        "",
-        text,
-        flags=re.DOTALL,
-    )
-    # 2. Strip stray opening/closing tags
-    text = re.sub(r"(?is)<\s*/\s*environment_details\s*>", "", text)
-    text = re.sub(r"(?is)<\s*environment_details[^>]*>", "", text)
-    # 3. Strip image-read errors
+    text = _strip_environment_details(text)
+    # Strip image-read errors
     text = re.sub(
         r"(?i)^ERROR:\s*Cannot read\s*['\"][^'\"]+['\"].*$",
         "",
         text,
         flags=re.MULTILINE,
     )
-    # 4. Line-by-line metadata filtering
     lines = text.splitlines()
     cleaned = []
     for line in lines:
@@ -422,25 +420,14 @@ def _clean_error(text: str) -> str:
             continue
         cleaned.append(line)
     text = "\n".join(cleaned)
-    # 5. Strip any remaining HTML-like tags (safe for error messages)
     text = re.sub(r"<[^>]+>", "", text)
-    # 6. Collapse blank lines
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     return text
 
 
 def _clean_streaming(text: str) -> str:
     """Lightweight cleanup for real-time streaming display."""
-    # Strip <environment_details> blocks so they never render in the UI
-    text = re.sub(
-        r"(?is)<\s*environment_details\b[^>]*>.*?</\s*environment_details\s*>",
-        "",
-        text,
-        flags=re.DOTALL,
-    )
-    # Strip stray tags
-    text = re.sub(r"(?is)<\s*/\s*environment_details\s*>", "", text)
-    text = re.sub(r"(?is)<\s*environment_details[^>]*>", "", text)
+    text = _strip_environment_details(text)
     # Strip image-read error lines that may appear mid-stream
     text = re.sub(
         r"(?i)^ERROR:\s*Cannot read\s*['\"][^'\"]+['\"].*$",
