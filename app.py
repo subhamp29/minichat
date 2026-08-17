@@ -91,12 +91,6 @@ MODEL_OPTIONS = {
 # ---------------------------------------------------------------------------
 # Remote models
 # ---------------------------------------------------------------------------
-    "backend": "remote",
-    "slug": "claude-opus-free",
-    "n_ctx": 8192,
-    "template": "phi3",
-    "description": "Remote combo model via router (claude-opus-free)",
-}
 
 _remote_slugs = _get_available_models()
 for _slug in _remote_slugs:
