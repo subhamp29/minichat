@@ -1946,11 +1946,21 @@ if st.session_state.get("messages"):
 if "selected_model" not in st.session_state:
     st.session_state.selected_model = DEFAULT_MODEL_KEY
 
+# Track whether the startup router-env-var check has already run this session.
+# We only want to auto-fallback once; re-running it on every rerun causes
+# the selectbox widget and session state to ping-pong, which produces the
+# flickering loop reported for claude-opus-free.
+if "_startup_router_check_done" not in st.session_state:
+    st.session_state._startup_router_check_done = False
+
 # Startup check: verify router env vars if default model is remote.
 # Instead of crashing, auto-fallback to a local GGUF model so the app
 # always starts. Show a persistent notice so the user can configure
 # the router later or switch models manually.
-if st.session_state.selected_model in MODEL_OPTIONS:
+if (
+    not st.session_state._startup_router_check_done
+    and st.session_state.selected_model in MODEL_OPTIONS
+):
     model_cfg = MODEL_OPTIONS[st.session_state.selected_model]
     if model_cfg.get("backend") == "remote":
         missing = []
@@ -1974,6 +1984,7 @@ if st.session_state.selected_model in MODEL_OPTIONS:
                     f"Please configure them in your deployment dashboard (e.g., Railway → Settings → Variables)."
                 )
                 st.stop()
+    st.session_state._startup_router_check_done = True
 
 if "last_error" not in st.session_state:
     st.session_state.last_error = None
@@ -2165,6 +2176,9 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.last_error = None
         st.session_state.last_user_input = None
+        # Reset the startup-check flag so the router-env-var guard runs again
+        # for the newly selected model (only once, then it locks).
+        st.session_state._startup_router_check_done = False
         st.rerun()
 
     st.caption(
@@ -2211,6 +2225,7 @@ with st.sidebar:
             st.session_state.messages = []
             st.session_state.last_error = None
             st.session_state.last_user_input = None
+            st.session_state._startup_router_check_done = False
             st.rerun()
         else:
             st.warning("Please enter both HuggingFace Repo ID and GGUF Filename.")
