@@ -1900,7 +1900,10 @@ if "messages" not in st.session_state:
 if "selected_model" not in st.session_state:
     st.session_state.selected_model = DEFAULT_MODEL_KEY
 
-# Startup check: verify router env vars if default model is remote
+# Startup check: verify router env vars if default model is remote.
+# Instead of crashing, auto-fallback to a local GGUF model so the app
+# always starts. Show a persistent notice so the user can configure
+# the router later or switch models manually.
 if st.session_state.selected_model in MODEL_OPTIONS:
     model_cfg = MODEL_OPTIONS[st.session_state.selected_model]
     if model_cfg.get("backend") == "remote":
@@ -1910,12 +1913,21 @@ if st.session_state.selected_model in MODEL_OPTIONS:
         if not os.environ.get("ROUTER_API_KEY"):
             missing.append("ROUTER_API_KEY")
         if missing:
-            st.error(
-                f"⚠️ Remote model '{st.session_state.selected_model}' is selected as default, "
-                f"but the following environment variables are not set: {', '.join(missing)}. "
-                f"Please configure them in your deployment dashboard (e.g., Railway → Settings → Variables)."
-            )
-            st.stop()
+            local_fallback_key = "Qwen2.5 0.5B (Q4_K_M) - Ultra Fast"
+            if local_fallback_key in MODEL_OPTIONS:
+                st.session_state.selected_model = local_fallback_key
+                st.session_state.fallback_notice = (
+                    f"⚠️ Router not configured (missing: {', '.join(missing)}). "
+                    f"Bhavyam AI automatically switched to '{local_fallback_key}'. "
+                    f"To use remote models, set {', '.join(missing)} in Railway → Settings → Variables."
+                )
+            else:
+                st.error(
+                    f"⚠️ Remote model '{st.session_state.selected_model}' is selected, "
+                    f"but the following environment variables are not set: {', '.join(missing)}. "
+                    f"Please configure them in your deployment dashboard (e.g., Railway → Settings → Variables)."
+                )
+                st.stop()
 
 if "last_error" not in st.session_state:
     st.session_state.last_error = None
