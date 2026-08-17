@@ -2450,23 +2450,6 @@ st.markdown(
 )
 
 # Load model with automatic fallback support
-def _clean_error(text: str) -> str:
-    """Remove leaked metadata from error messages."""
-    text = re.sub(r"(?is)<\s*environment_details\b[^>]*>.*?<\s*/\s*environment_details\s*>", "", text)
-    text = re.sub(r"(?is)<environment_details>.*?</environment_details>", "", text, flags=re.DOTALL)
-    text = re.sub(r"(?is)<\s*environment_details\b[^>]*>.*", "", text, flags=re.DOTALL)
-    
-    lines = text.splitlines()
-    cleaned = []
-    for line in lines:
-        lower = line.strip().lower()
-        if any(k in lower for k in ["current time:", "working directory:", "workspace root folder:", "<environment_details", "</environment_details>"]):
-            continue
-        cleaned.append(line)
-    text = "\n".join(cleaned)
-    text = re.sub(r"<[^>]+>", "", text)
-    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
-    return "\n".join(lines).strip()
 
 try:
     model = load_model(st.session_state.selected_model)
