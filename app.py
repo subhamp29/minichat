@@ -92,16 +92,25 @@ MODEL_OPTIONS = {
 # Remote models
 # ---------------------------------------------------------------------------
 
+# Static fallback so claude-opus-free is always selectable even if ROUTER_MODELS
+# is not configured.
+MODEL_OPTIONS["Remote: claude-opus-free"] = {
+    "backend": "remote",
+    "slug": "claude-opus-free",
+    "n_ctx": 8192,
+    "template": "phi3",
+    "description": "Remote combo model via router (claude-opus-free)",
+}
+
 _remote_slugs = _get_available_models()
 for _slug in _remote_slugs:
-    if _slug != "claude-opus-free":
-        MODEL_OPTIONS[f"Remote: {_slug}"] = {
-            "backend": "remote",
-            "slug": _slug,
-            "n_ctx": 8192,
-            "template": "phi3",
-            "description": f"Remote model via router ({_slug})",
-        }
+    MODEL_OPTIONS[f"Remote: {_slug}"] = {
+        "backend": "remote",
+        "slug": _slug,
+        "n_ctx": 8192,
+        "template": "phi3",
+        "description": f"Remote model via router ({_slug})",
+    }
 
 DEFAULT_MODEL_KEY = os.environ.get("DEFAULT_MODEL_KEY", "Qwen2.5 0.5B (Q4_K_M) - Ultra Fast")
 
