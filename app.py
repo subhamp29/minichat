@@ -118,11 +118,11 @@ for _slug in _remote_slugs:
             "description": f"Remote model via router ({_slug})",
         }
 
-DEFAULT_MODEL_KEY = os.environ.get("DEFAULT_MODEL_KEY", "n8n Orchestrated (Supabase + Router)")
+DEFAULT_MODEL_KEY = os.environ.get("DEFAULT_MODEL_KEY", "Qwen2.5 0.5B (Q4_K_M) - Ultra Fast")
 
 # Ensure the configured default model exists in MODEL_OPTIONS
 if DEFAULT_MODEL_KEY not in MODEL_OPTIONS:
-    DEFAULT_MODEL_KEY = "n8n Orchestrated (Supabase + Router)"
+    DEFAULT_MODEL_KEY = "Qwen2.5 0.5B (Q4_K_M) - Ultra Fast"
 
 CACHE_DIR = Path(os.environ.get("HF_HOME", ".model_cache"))
 
