@@ -1860,8 +1860,10 @@ def load_model(model_key: str):
     except Exception as download_err:
         if model_key != DEFAULT_MODEL_KEY:
             st.session_state.fallback_notice = (
-                f"⚠️ Download issue with '{model_key}': {download_err}. "
-                f"Automatically loaded '{DEFAULT_MODEL_KEY}' instead."
+                _clean_message_content(
+                    f"⚠️ Download issue with '{model_key}': {download_err}. "
+                    f"Automatically loaded '{DEFAULT_MODEL_KEY}' instead."
+                )
             )
             st.session_state.selected_model = DEFAULT_MODEL_KEY
             return load_model(DEFAULT_MODEL_KEY)
@@ -1942,6 +1944,12 @@ if st.session_state.get("messages"):
         {"role": m["role"], "content": _clean_message_content(m.get("content", ""))}
         for m in st.session_state.messages
     ]
+
+# Also clean any stray metadata that may have landed in notices / error state.
+if st.session_state.get("fallback_notice"):
+    st.session_state.fallback_notice = _clean_message_content(st.session_state.fallback_notice)
+if st.session_state.get("last_error"):
+    st.session_state.last_error = _clean_message_content(st.session_state.last_error)
 
 if "selected_model" not in st.session_state:
     st.session_state.selected_model = DEFAULT_MODEL_KEY
@@ -2364,7 +2372,7 @@ st.markdown('<div class="main-content">', unsafe_allow_html=True)
 
     # Display RAM / Fallback notice if present
 if st.session_state.get("fallback_notice"):
-    st.info(st.session_state.fallback_notice)
+    st.info(_clean_message_content(st.session_state.fallback_notice))
     if st.button("✖️ Dismiss Notice", key="dismiss_fallback"):
         st.session_state.fallback_notice = None
         st.rerun()
