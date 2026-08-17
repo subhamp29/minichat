@@ -1980,7 +1980,7 @@ if st.session_state.selected_model in MODEL_OPTIONS:
                 f"Set {', '.join(missing)} in Railway → Settings → Variables, or switch "
                 f"to a local model in the sidebar."
             )
-        elif st.session_state.get("fallback_notice", "").startswith("⚠️ Router not fully configured"):
+        elif (st.session_state.get("fallback_notice") or "").startswith("⚠️ Router not fully configured"):
             # Clear a stale router-missing notice once env vars are present.
             st.session_state.fallback_notice = None
 
