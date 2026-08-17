@@ -89,17 +89,8 @@ MODEL_OPTIONS = {
 }
 
 # ---------------------------------------------------------------------------
-# Remote & n8n Orchestrated models
+# Remote models
 # ---------------------------------------------------------------------------
-MODEL_OPTIONS["n8n Orchestrated (Supabase + Router)"] = {
-    "backend": "n8n_orchestrated",
-    "slug": "claude-opus-free",
-    "n_ctx": 8192,
-    "template": "chatml",
-    "description": "🔄 Full n8n orchestration: Streamlit UI ➔ n8n Webhook ➔ Supabase DB ➔ Router",
-}
-
-MODEL_OPTIONS["Remote: claude-opus-free"] = {
     "backend": "remote",
     "slug": "claude-opus-free",
     "n_ctx": 8192,
