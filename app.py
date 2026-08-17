@@ -22,14 +22,17 @@ from router_client import (
     stream_chat,
 )
 
-from n8n_supabase_client import (
-    N8nOrchestrationError,
-    send_to_n8n_webhook,
-    fetch_supabase_conversations,
-    fetch_supabase_messages,
-    health_check_n8n,
-    get_n8n_config,
-)
+# n8n Supabase client is optional — only needed for the n8n_orchestrated backend.
+try:
+    from n8n_supabase_client import (
+        N8nOrchestrationError,
+        send_to_n8n_webhook,
+    )
+    _N8N_CLIENT_AVAILABLE = True
+except ImportError:
+    class N8nOrchestrationError(Exception):
+        """Fallback when n8n_supabase_client is not installed."""
+    _N8N_CLIENT_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -2557,6 +2560,9 @@ if user_input := user_input.strip() if isinstance(user_input, str) else None:
     elif backend == "n8n_orchestrated":
         def streaming_generator():
             """Send message to n8n webhook and yield response."""
+            if not _N8N_CLIENT_AVAILABLE:
+                yield "n8n_orchestrated backend is not available: n8n_supabase_client module is missing. Deploy it alongside app.py or switch to a remote/local model."
+                return
             state = st.session_state._stream_state
             try:
                 n8n_res = send_to_n8n_webhook(
