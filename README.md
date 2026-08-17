@@ -1,11 +1,20 @@
+---
+title: MiniChat
+emoji: 🤖
+colorFrom: green
+colorTo: red
+sdk: streamlit
+pinned: false
+---
+
 # 🤖 MiniChat
 
-A fully **CPU‑only**, deployable ChatGPT‑style chatbot built with **Streamlit** + **llama‑cpp‑python** + **Phi‑2 (Q4_K_M)**.
+A fully **CPU‑only**, deployable ChatGPT‑style chatbot built with **Streamlit** + **llama‑cpp‑python** + **Phi‑3 Mini (Q4)**.
 
 ## ✨ Features
 
 - **100 % CPU inference** — no CUDA, no MPS, no dedicated GPU required.
-- **Auto‑download model** — fetches `TheBloke/phi-2-GGUF` on first run and caches it locally.
+- **Auto‑download model** — fetches `microsoft/Phi-3-mini-4k-instruct-gguf` on first run and caches it locally.
 - **Streaming responses** — token‑by‑token UI feedback.
 - **Memory‑efficient history** — keeps last 10 exchanges, trims to ~1024 tokens.
 - **Dark ChatGPT‑style UI** — `st.chat_message` bubbles with sidebar controls.
@@ -21,7 +30,7 @@ A fully **CPU‑only**, deployable ChatGPT‑style chatbot built with **Streamli
 | Streamlit | 1.28.0 |
 | llama‑cpp‑python | 0.2.56 |
 | Hugging Face Hub | 0.20.1 |
-| Model | Microsoft Phi‑2 Q4_K_M (~1.6 GB) |
+| Model | Microsoft Phi‑3 Mini Q4 (~2.4 GB) |
 
 ---
 
@@ -63,7 +72,7 @@ The browser will open automatically at `http://localhost:8501`.
 
 ### 5. First‑run model download
 
-On the very first launch, the app will download `phi-2.Q4_K_M.gguf` (~1.6 GB) from Hugging Face Hub into the local `.model_cache/` folder. This only happens once.
+On the very first launch, the app will download `Phi-3-mini-4k-instruct-q4.gguf` (~2.4 GB) from Hugging Face Hub into the local `.model_cache/` folder. This only happens once.
 
 ---
 
@@ -101,7 +110,7 @@ Edit the constants at the top of `app.py` to tune behaviour:
 
 | Variable | Default | Description |
 |---|---|---|
-| `N_CTX` | 2048 | Model context window (tokens) |
+| `N_CTX` | 4096 | Model context window (tokens) |
 | `N_THREADS` | `os.cpu_count()` | CPU threads for inference |
 | `N_GPU_LAYERS` | 0 | GPU layers (keep 0 for CPU‑only) |
 | `N_BATCH` | 512 | Batch size for prompt processing |
@@ -115,9 +124,9 @@ Edit the constants at the top of `app.py` to tune behaviour:
 
 | CPU | RAM | Expected performance |
 |---|---|---|
-| Intel i3‑1005G1 | 8 GB | ~8–15 tokens/sec (Q4_K_M) |
-| Intel i5‑10400 | 16 GB | ~20–30 tokens/sec |
-| AMD Ryzen 5 5600X | 16 GB | ~35–50 tokens/sec |
+| Intel i3‑1005G1 | 8 GB | ~5–10 tokens/sec (Q4) |
+| Intel i5‑10400 | 16 GB | ~15–25 tokens/sec |
+| AMD Ryzen 5 5600X | 16 GB | ~25–40 tokens/sec |
 
 > **Tip:** If response speed is too slow, reduce `MAX_TOKENS` or switch to `Q3_K_M` quantization (smaller file, slightly lower quality).
 
@@ -127,9 +136,9 @@ Edit the constants at the top of `app.py` to tune behaviour:
 
 | Issue | Solution |
 |---|---|
-| **Model download hangs** | Check internet connectivity. The model is ~1.6 GB. Hugging Face may rate‑limit; retry after a few minutes. |
+| **Model download hangs** | Check internet connectivity. The model is ~2.4 GB. Hugging Face may rate‑limit; retry after a few minutes. |
 | **`pip install` fails on Linux** | Install build tools: `sudo apt install cmake g++ build-essential` then retry. |
-| **Out of memory** | Close other applications. Phi‑2 Q4_K_M needs ~1.6 GB for the model + ~1 GB for inference buffers. 8 GB RAM is the minimum. |
+| **Out of memory** | Close other applications. Phi‑3 Mini Q4 needs ~2.4 GB for the model + ~1 GB for inference buffers. 8 GB RAM is the minimum. |
 | **Responses are cut off** | Increase `MAX_TOKENS` or check that `stop` sequences aren’t matching prematurely. |
 | **Streamlit won’t start on HF Spaces** | Ensure `packages.txt` contains `cmake` and `build-essential`, and that `requirements.txt` is correct. Check the Space build logs for errors. |
 
@@ -137,4 +146,4 @@ Edit the constants at the top of `app.py` to tune behaviour:
 
 ## 📄 License
 
-This project is provided as‑is for educational and personal use. The Phi‑2 model is subject to Microsoft’s license terms.
+This project is provided as‑is for educational and personal use. The Phi‑3 Mini model is subject to Microsoft’s license terms.

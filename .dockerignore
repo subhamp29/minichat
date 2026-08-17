@@ -15,3 +15,20 @@ README.md
 *.swp
 *.swo
 *~
+
+# Local environment & secrets
+.env
+.env.*
+
+# Model cache & downloaded artifacts (not needed in container)
+.model_cache/
+*.gguf
+chat_history.db
+
+# Training artifacts (not needed for remote-router-first deployment)
+lora-probe/
+lora-accurate/
+finetune_dataset.jsonl
+*.jsonl
+adapter_config.json
+adapter_model.safetensors
