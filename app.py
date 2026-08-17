@@ -182,9 +182,12 @@ def list_conversations():
         return [
             {
                 "id": row[0],
-                "title": row[1],
+                "title": _clean_message_content(row[1]),
                 "created_at": row[2],
-                "messages": json.loads(row[3]),
+                "messages": [
+                    {"role": m["role"], "content": _clean_message_content(m.get("content", ""))}
+                    for m in json.loads(row[3])
+                ],
             }
             for row in rows
         ]
@@ -201,6 +204,10 @@ def list_conversations():
 def save_conversation(conversation_id, title, messages):
     """Upsert a conversation into SQLite."""
     try:
+        cleaned_messages = [
+            {"role": m["role"], "content": _clean_message_content(m.get("content", ""))}
+            for m in messages
+        ]
         conn = sqlite3.connect(DB_PATH)
         conn.execute(
             "INSERT OR REPLACE INTO conversations (id, title, created_at, messages) VALUES (?, ?, ?, ?)",
@@ -208,7 +215,7 @@ def save_conversation(conversation_id, title, messages):
                 conversation_id,
                 title,
                 datetime.utcnow().isoformat(),
-                json.dumps(messages, ensure_ascii=False),
+                json.dumps(cleaned_messages, ensure_ascii=False),
             ),
         )
         conn.commit()
@@ -238,11 +245,16 @@ def get_conversation(conversation_id):
         ).fetchone()
         conn.close()
         if row:
+            messages = json.loads(row[3])
+            cleaned_messages = [
+                {"role": m["role"], "content": _clean_message_content(m.get("content", ""))}
+                for m in messages
+            ]
             return {
                 "id": row[0],
-                "title": row[1],
+                "title": _clean_message_content(row[1]),
                 "created_at": row[2],
-                "messages": json.loads(row[3]),
+                "messages": cleaned_messages,
             }
         return None
     except Exception:
@@ -258,11 +270,16 @@ def get_most_recent_conversation():
         ).fetchone()
         conn.close()
         if row:
+            messages = json.loads(row[3])
+            cleaned_messages = [
+                {"role": m["role"], "content": _clean_message_content(m.get("content", ""))}
+                for m in messages
+            ]
             return {
                 "id": row[0],
-                "title": row[1],
+                "title": _clean_message_content(row[1]),
                 "created_at": row[2],
-                "messages": json.loads(row[3]),
+                "messages": cleaned_messages,
             }
         return None
     except Exception:
@@ -281,7 +298,8 @@ def generate_conversation_title(messages: list) -> str:
     """Generate a title from the first user message in the conversation."""
     for msg in messages:
         if msg["role"] == "user" and msg["content"].strip():
-            return truncate_text(msg["content"].strip())
+            cleaned = _clean_message_content(msg["content"].strip())
+            return truncate_text(cleaned)
     return "New Chat"
 
 
@@ -347,24 +365,19 @@ def _strip_environment_details(text: str) -> str:
     return "".join(result)
 
 
-def clean_response(text: str) -> str:
-    """Remove leaked system metadata tags from model output."""
-    # 1. Strip <environment_details>...</environment_details> blocks
-    text = _strip_environment_details(text)
-    # 2. Strip known system tag families
-    text = re.sub(r"(?is)<\s*system\b[^>]*>.*?</\s*system\s*>", "", text, flags=re.DOTALL)
-    text = re.sub(r"<\|im_start\|>.*?<\|im_end\|>", "", text, flags=re.DOTALL)
-    text = re.sub(r"<\|im_sep\|>", "", text)
-    text = re.sub(r"(?is)<\s*/\s*im_\w+\s*>", "", text)
-    text = re.sub(r"<\|[^|]*\|>", "", text)
-    # 3. Strip image-read errors
+def _clean_message_content(content: str) -> str:
+    """Clean a single message's content for safe storage and display."""
+    if not isinstance(content, str):
+        return content
+    text = _strip_environment_details(content)
+    # Strip image-read errors
     text = re.sub(
         r"(?i)^ERROR:\s*Cannot read\s*['\"][^'\"]+['\"].*$",
         "",
         text,
         flags=re.MULTILINE,
     )
-    # 4. Line-by-line metadata filtering
+    # Strip metadata keyword lines
     lines = text.splitlines()
     keep = []
     for line in lines:
@@ -380,7 +393,7 @@ def clean_response(text: str) -> str:
             continue
         keep.append(line)
     text = "\n".join(keep)
-    # 5. Final validation — if leaked metadata remains, return safe fallback
+    # Final check — if leaked metadata remains, return safe fallback
     lower_text = text.lower()
     if any(p in lower_text for p in [
         "<environment_details",
@@ -390,9 +403,13 @@ def clean_response(text: str) -> str:
         "workspace root folder:",
     ]):
         return "I cannot provide that answer."
-    # 6. Collapse excess blank lines
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     return text
+
+
+def clean_response(text: str) -> str:
+    """Remove leaked system metadata tags from model output."""
+    return _clean_message_content(text)
 
 
 def _clean_error(text: str) -> str:
@@ -2086,7 +2103,7 @@ with st.sidebar:
         if st.button("💾 Export", use_container_width=True):
             if st.session_state.get("messages"):
                 chat_text = "\n\n".join(
-                    f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}"
+                    f"{'User' if m['role'] == 'user' else 'Assistant'}: {_clean_message_content(m['content'])}"
                     for m in st.session_state.messages
                 )
                 st.download_button(
@@ -2390,7 +2407,7 @@ else:
     for idx, msg in enumerate(messages_to_show):
         role = msg["role"]
         avatar_emoji = "👤" if role == "user" else "🤖"
-        content_html = escape(msg["content"]).replace("\n", "<br>")
+        content_html = escape(_clean_message_content(msg["content"])).replace("\n", "<br>")
         st.markdown(
             f"""
             <div class="chat-bubble {role}">
@@ -2494,7 +2511,7 @@ if user_input := user_input.strip() if isinstance(user_input, str) else None:
         f"""
         <div class="chat-bubble user">
             <div class="avatar user">👤</div>
-            <div class="message-content">{escape(user_input).replace(chr(10), '<br>')}</div>
+            <div class="message-content">{escape(_clean_message_content(user_input)).replace(chr(10), '<br>')}</div>
         </div>
         """,
         unsafe_allow_html=True,
