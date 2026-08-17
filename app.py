@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import sqlite3
 import uuid
 import json
@@ -467,7 +468,7 @@ def _clean_streaming(text: str) -> str:
         ]):
             continue
         keep.append(line)
-    return "\n".join(keep).strip()
+    return "\n".join(keep)
 
 
 STOP_SEQUENCES = ["<|end|>", "<|user|>", "<|assistant|>", "<|endoftext|>"]
@@ -2591,6 +2592,7 @@ if user_input := user_input.strip() if isinstance(user_input, str) else None:
                     + history_for_prompt
                     + [{"role": "user", "content": augmented_user_msg}]
                 )
+                chunks = []
                 for chunk in stream_chat(
                     messages=remote_messages,
                     model_slug=model_slug,
@@ -2599,9 +2601,34 @@ if user_input := user_input.strip() if isinstance(user_input, str) else None:
                     max_tokens=max_tokens_slider,
                 ):
                     state["captured_tokens"].append(chunk)
-                    cleaned_chunk = _clean_streaming(chunk)
-                    if cleaned_chunk:
-                        yield cleaned_chunk
+                    chunks.append(chunk)
+
+                if len(chunks) == 1 and chunks[0]:
+                    # Router returned the whole response in one shot.
+                    # Reveal it progressively as a typewriter effect.
+                    full_text = chunks[0]
+                    words = full_text.split(" ")
+                    for word in words:
+                        piece = word + " "
+                        cleaned_piece = _clean_streaming(piece)
+                        if cleaned_piece:
+                            yield cleaned_piece
+                        time.sleep(0.03)
+                else:
+                    # Real streaming: preserve spacing between chunks
+                    prev_chunk = ""
+                    for chunk in chunks:
+                        if (
+                            prev_chunk
+                            and not prev_chunk.endswith((" ", "\n", "\t"))
+                            and chunk
+                            and not chunk.startswith((" ", "\n", "\t"))
+                        ):
+                            chunk = " " + chunk
+                        prev_chunk = chunk
+                        cleaned_chunk = _clean_streaming(chunk)
+                        if cleaned_chunk:
+                            yield cleaned_chunk
             except (RouterConfigurationError, RouterError) as exc:
                 state["error_occurred"] = True
                 state["error_message"] = str(exc)

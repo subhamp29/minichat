@@ -145,9 +145,9 @@ def stream_chat(
 
     buffer = ""
     for line in resp.iter_lines(decode_unicode=True):
-        if not line:
+        if line is None:
             continue
-        line = line.strip()
+        line = str(line).strip()
         if not line.startswith("data:"):
             continue
         data_str = line[5:].strip()
