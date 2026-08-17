@@ -324,23 +324,38 @@ init_db()
 
 def clean_response(text: str) -> str:
     """Remove leaked system metadata tags from model output."""
-    # Step 1: Remove complete environment_details blocks (multiple patterns)
-    text = re.sub(r"(?is)<\s*environment_details\b[^>]*>.*?<\s*/\s*environment_details\s*>", "", text)
-    text = re.sub(r"(?is)<environment_details>.*?</environment_details>", "", text, flags=re.DOTALL)
-    
-    # Step 2: Line-by-line aggressive filtering
+    # 1. Strip complete <environment_details>...</environment_details> blocks
+    text = re.sub(
+        r"(?is)<\s*environment_details\b[^>]*>.*?</\s*environment_details\s*>",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
+    # 2. Strip known system tag families
+    text = re.sub(r"(?is)<\s*system\b[^>]*>.*?</\s*system\s*>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<\|im_start\|>.*?<\|im_end\|>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<\|im_sep\|>", "", text)
+    text = re.sub(r"(?is)<\s*/\s*im_\w+\s*>", "", text)
+    text = re.sub(r"<\|[^|]*\|>", "", text)
+    text = re.sub(
+        r"</?\b(environment_details|system|start_header_id|end_header_id|eot_id|end_of_text)\b[^>]*>",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    # 3. Strip image-read errors and tool errors that leak from external processes
+    text = re.sub(
+        r"(?i)^ERROR:\s*Cannot read\s*['\"][^'\"]+['\"].*$",
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
+    # 4. Line-by-line metadata filtering
     lines = text.splitlines()
-    filtered = []
+    keep = []
     for line in lines:
-        stripped = line.strip()
-        lower = stripped.lower()
-        # Skip environment_details tags (opening, closing, self-closing)
-        if stripped.startswith("<environment_details") or stripped.startswith("</environment_details"):
-            continue
-        if stripped == "<environment_details>" or stripped == "</environment_details>":
-            continue
-        # Skip lines that are clearly system metadata
-        if any(keyword in lower for keyword in [
+        lower = line.strip().lower()
+        if any(k in lower for k in [
             "current time:",
             "working directory:",
             "workspace root folder:",
@@ -349,55 +364,16 @@ def clean_response(text: str) -> str:
             "os:",
             "python version:",
             "cpu cores:",
-        ]):
-            continue
-        filtered.append(line)
-    text = "\n".join(filtered)
-    
-    # Step 3: Remove other system tags
-    text = re.sub(r"(?is)<\s*system\b[^>]*>.*?<\s*/\s*system\s*>", "", text)
-    text = re.sub(r"<\|im_start\|>.*?<\|im_end\|>", "", text, flags=re.DOTALL)
-    text = re.sub(r"<\|im_sep\|>", "", text)
-    text = re.sub(r"(?is)<\s*/\s*im_\w+\s*>", "", text)
-    text = re.sub(r"<\|im_[a-z_]+\|>", "", text)
-    
-    # Step 4: Remove any remaining known system special tokens/tags.
-    # IMPORTANT: Do NOT use a blanket <[^>]+> regex here — it would also
-    # strip legitimate text like math comparisons ("a < b") or code
-    # containing "<" / ">" characters, producing wrong answers.
-    # Only strip tokens that start with "<|" or match known system tag names.
-    text = re.sub(r"<\|[^|]*\|>", "", text)
-    text = re.sub(
-        r"</?\b(environment_details|system|start_header_id|end_header_id|eot_id|end_of_text)\b[^>]*>",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    )
-    
-    # Step 4b: Strip any verbatim leakage of the system prompt itself
-    if SYSTEM_PROMPT.strip() and SYSTEM_PROMPT.strip() in text:
-        text = text.replace(SYSTEM_PROMPT.strip(), "").strip()
-    
-    # Step 5: Remove any lines that still contain suspicious patterns
-    lines = text.splitlines()
-    final_lines = []
-    for line in lines:
-        lower = line.lower()
-        if any(pattern in lower for pattern in [
-            "environment_details",
-            "current time:",
-            "working directory:",
-            "workspace root folder:",
-            "cwd:",
+            "open tabs:",
             "<|im_",
+            "cannot read",
         ]):
             continue
-        final_lines.append(line)
-    text = "\n".join(final_lines)
-    
-    # Step 6: Final validation - if any leaked metadata remains, use fallback
+        keep.append(line)
+    text = "\n".join(keep)
+    # 5. Final validation — if leaked metadata remains, return safe fallback
     lower_text = text.lower()
-    if any(pattern in lower_text for pattern in [
+    if any(p in lower_text for p in [
         "<environment_details",
         "environment_details>",
         "current time:",
@@ -406,31 +382,88 @@ def clean_response(text: str) -> str:
         "<|im_",
     ]):
         return "I cannot provide that answer."
-    
-    # Step 6b: Normalize creator/owner pronoun consistency
-    # Small models sometimes switch to second person or claim self-creation;
-    # nudge them back to the intended first-person phrasing.
-    name = "Bhavyam AI"
-    creator = "Subham Mahapatra"
-    origin = "Odisha, India"
-    lower = lower_text
-    # Wrong patterns: "your creator is...", "i am the creator", "i created myself"
-    if (
-        "your creator is" in lower
-        or "i am the creator" in lower
-        or "i created myself" in lower
-        or ("i am " in lower and "ai" in lower and "created by" not in lower)
-    ):
-        text = f"I am {name}, created by {creator} from {origin}."
-        return text
-    # Also catch standalone wrong self-introductions
-    if text.strip().lower().startswith("i am the creator"):
-        text = f"I am {name}, created by {creator} from {origin}."
-        return text
-    
-    # Step 7: Clean up whitespace
-    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
-    return "\n".join(lines).strip()
+    # 6. Collapse excess blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text
+
+
+def _clean_error(text: str) -> str:
+    """Remove leaked metadata from error messages."""
+    # 1. Strip complete <environment_details>...</environment_details> blocks
+    text = re.sub(
+        r"(?is)<\s*environment_details\b[^>]*>.*?</\s*environment_details\s*>",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
+    # 2. Strip stray opening/closing tags
+    text = re.sub(r"(?is)<\s*/\s*environment_details\s*>", "", text)
+    text = re.sub(r"(?is)<\s*environment_details[^>]*>", "", text)
+    # 3. Strip image-read errors
+    text = re.sub(
+        r"(?i)^ERROR:\s*Cannot read\s*['\"][^'\"]+['\"].*$",
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
+    # 4. Line-by-line metadata filtering
+    lines = text.splitlines()
+    cleaned = []
+    for line in lines:
+        lower = line.strip().lower()
+        if any(k in lower for k in [
+            "current time:",
+            "working directory:",
+            "workspace root folder:",
+            "environment_details",
+            "open tabs:",
+            "cannot read",
+        ]):
+            continue
+        cleaned.append(line)
+    text = "\n".join(cleaned)
+    # 5. Strip any remaining HTML-like tags (safe for error messages)
+    text = re.sub(r"<[^>]+>", "", text)
+    # 6. Collapse blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text
+
+
+def _clean_streaming(text: str) -> str:
+    """Lightweight cleanup for real-time streaming display."""
+    # Strip <environment_details> blocks so they never render in the UI
+    text = re.sub(
+        r"(?is)<\s*environment_details\b[^>]*>.*?</\s*environment_details\s*>",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
+    # Strip stray tags
+    text = re.sub(r"(?is)<\s*/\s*environment_details\s*>", "", text)
+    text = re.sub(r"(?is)<\s*environment_details[^>]*>", "", text)
+    # Strip image-read error lines that may appear mid-stream
+    text = re.sub(
+        r"(?i)^ERROR:\s*Cannot read\s*['\"][^'\"]+['\"].*$",
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
+    # Strip metadata keywords line-by-line
+    lines = text.splitlines()
+    keep = []
+    for line in lines:
+        lower = line.strip().lower()
+        if any(k in lower for k in [
+            "current time:",
+            "working directory:",
+            "workspace root folder:",
+            "environment_details",
+            "open tabs:",
+            "cannot read",
+        ]):
+            continue
+        keep.append(line)
+    return "\n".join(keep).strip()
 
 
 STOP_SEQUENCES = ["<|end|>", "<|user|>", "<|assistant|>", "<|endoftext|>"]
@@ -1952,13 +1985,18 @@ if "fallback_notice" not in st.session_state:
 # ---------------------------------------------------------------------------
 def build_prompt(system: str, history: list, user_msg: str, template_key: str) -> str:
     t = CHAT_TEMPLATES[template_key]
-    prompt = t["system"].format(c=system)
+    # Strip any leaked <environment_details> blocks from the prompt so the
+    # model cannot echo them back in its response.
+    clean_system = _clean_streaming(system)
+    prompt = t["system"].format(c=clean_system)
     for turn in history:
         role = turn["role"]
         content = turn["content"]
         if role in ("user", "assistant"):
-            prompt += t[role].format(c=content)
-    prompt += t["user"].format(c=user_msg) + t["assistant_open"]
+            clean_content = _clean_streaming(content)
+            prompt += t[role].format(c=clean_content)
+    clean_user = _clean_streaming(user_msg)
+    prompt += t["user"].format(c=clean_user) + t["assistant_open"]
     return prompt
 
 # ---------------------------------------------------------------------------
@@ -2631,7 +2669,8 @@ if user_input := user_input.strip() if isinstance(user_input, str) else None:
     accumulated_stream = ""
     for token in streaming_generator():
         accumulated_stream += token
-        content_html = escape(accumulated_stream).replace("\n", "<br>")
+        display_text = _clean_streaming(accumulated_stream)
+        content_html = escape(display_text).replace("\n", "<br>")
         chat_placeholder.markdown(
             f"""
             <div class="chat-bubble assistant">
