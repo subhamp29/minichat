@@ -2616,18 +2616,18 @@ if user_input := user_input.strip() if isinstance(user_input, str) else None:
                     max_tokens=max_tokens_slider,
                 ):
                     state["captured_tokens"].append(chunk)
-                    display_token = re.sub(r"<\|[^|]*\|>", "", chunk)
-                    if display_token:
-                        yield display_token
+                    cleaned_chunk = _clean_streaming(chunk)
+                    if cleaned_chunk:
+                        yield cleaned_chunk
             except (RouterConfigurationError, RouterError) as exc:
                 state["error_occurred"] = True
                 state["error_message"] = str(exc)
-                yield str(exc)
+                yield _clean_streaming(str(exc))
     elif backend == "n8n_orchestrated":
         def streaming_generator():
             """Send message to n8n webhook and yield response."""
             if not _N8N_CLIENT_AVAILABLE:
-                yield "n8n_orchestrated backend is not available: n8n_supabase_client module is missing. Deploy it alongside app.py or switch to a remote/local model."
+                yield _clean_streaming("n8n_orchestrated backend is not available: n8n_supabase_client module is missing. Deploy it alongside app.py or switch to a remote/local model.")
                 return
             state = st.session_state._stream_state
             try:
@@ -2641,15 +2641,15 @@ if user_input := user_input.strip() if isinstance(user_input, str) else None:
                 if not answer:
                     answer = "n8n completed workflow successfully but returned empty response."
                 state["captured_tokens"].append(answer)
-                yield answer
+                yield _clean_streaming(answer)
             except N8nOrchestrationError as exc:
                 state["error_occurred"] = True
                 state["error_message"] = str(exc)
-                yield str(exc)
+                yield _clean_streaming(str(exc))
             except Exception as exc:
                 state["error_occurred"] = True
                 state["error_message"] = f"n8n Orchestration Error: {exc}"
-                yield str(exc)
+                yield _clean_streaming(str(exc))
     else:
         def streaming_generator():
             """Yield tokens while capturing them for later use."""
@@ -2678,9 +2678,9 @@ if user_input := user_input.strip() if isinstance(user_input, str) else None:
                         return
                     # Lightweight per-token cleanup only — don't strip whitespace-only tokens
                     state["captured_tokens"].append(token)  # Keep raw for history
-                    display_token = re.sub(r"<\|[^|]*\|>", "", token)  # strip obvious special tokens only
-                    if display_token:
-                        yield display_token
+                    cleaned_token = _clean_streaming(token)
+                    if cleaned_token:
+                        yield cleaned_token
             except Exception as e:
                 state["error_occurred"] = True
                 state["error_message"] = clean_response(f"\n\n*[Generation error: {e}]*")
