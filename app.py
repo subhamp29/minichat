@@ -1934,6 +1934,15 @@ if "messages" not in st.session_state:
             }
         ]
 
+# Global cleanup: scrub any leaked metadata from session messages on every rerun.
+# This prevents flicker from dirty state that was loaded before the cleaning
+# fix was deployed, or from any source that bypassed the per-function guards.
+if st.session_state.get("messages"):
+    st.session_state.messages = [
+        {"role": m["role"], "content": _clean_message_content(m.get("content", ""))}
+        for m in st.session_state.messages
+    ]
+
 if "selected_model" not in st.session_state:
     st.session_state.selected_model = DEFAULT_MODEL_KEY
 
