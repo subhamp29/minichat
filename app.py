@@ -15,13 +15,73 @@ import streamlit as st
 import streamlit.components.v1 as components
 from huggingface_hub import hf_hub_download
 from llama_cpp import Llama
-
 from router_client import (
     RouterConfigurationError,
     RouterError,
     _get_available_models,
     stream_chat,
 )
+
+# ---------------------------------------------------------------------------
+# Groq + Gemini fallback chat completion
+# ---------------------------------------------------------------------------
+def get_chat_response(messages: str) -> str:
+    """Call Groq first, fall back to Gemini if Groq fails or rate-limits."""
+    import requests as _requests
+    import os as _os
+
+    def call_groq():
+        api_key = _os.environ.get("GROQ_API_KEY")
+        if not api_key:
+            raise ValueError("GROQ_API_KEY not set")
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": messages,
+            "temperature": 0.7,
+        }
+        response = _requests.post(url, json=payload, headers=headers, timeout=20)
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+
+    def call_gemini():
+        api_key = _os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY not set")
+        url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        payload = {
+            "model": "gemini-2.0-flash",
+            "messages": messages,
+            "temperature": 0.7,
+        }
+        response = _requests.post(url, json=payload, headers=headers, timeout=20)
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+
+    providers = [
+        ("Groq", call_groq),
+        ("Gemini", call_gemini),
+    ]
+
+    last_error = None
+    for name, fn in providers:
+        try:
+            return fn()
+        except Exception as e:
+            print(f"[PROVIDER-FAIL] {name}: {e}")
+            last_error = e
+            continue
+
+    raise RuntimeError(f"All providers failed. Last error: {last_error}")
+
 
 # n8n Supabase client is optional — only needed for the n8n_orchestrated backend.
 try:
@@ -38,7 +98,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-MODEL_OPTIONS = {
+_MODEL_OPTIONS_BASE = {
     "Qwen2.5 0.5B (Q4_K_M) - Ultra Fast": {
         "backend": "local_gguf",
         "repo": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
@@ -89,6 +149,8 @@ MODEL_OPTIONS = {
     },
 }
 
+MODEL_OPTIONS = dict(_MODEL_OPTIONS_BASE)
+
 # ---------------------------------------------------------------------------
 # Remote models
 # ---------------------------------------------------------------------------
@@ -112,6 +174,14 @@ for _slug in _remote_slugs:
         "template": "phi3",
         "description": f"Remote model via router ({_slug})",
     }
+
+# Groq + Gemini fallback cloud backend
+MODEL_OPTIONS["Groq + Gemini Fallback (Cloud)"] = {
+    "backend": "groq_gemini",
+    "n_ctx": 8192,
+    "template": "phi3",
+    "description": "Primary: Groq llama-3.3-70b | Fallback: Google Gemini 2.0 Flash",
+}
 
 DEFAULT_MODEL_KEY = os.environ.get("DEFAULT_MODEL_KEY", "Qwen2.5 0.5B (Q4_K_M) - Ultra Fast")
 
@@ -2644,7 +2714,7 @@ if user_input := user_input.strip() if isinstance(user_input, str) else None:
                 n8n_res = send_to_n8n_webhook(
                     message=augmented_user_msg,
                     conversation_id=st.session_state.current_conversation_id,
-                    model_slug=model_slug or "claude-opus-free",
+                    model=model_slug or "claude-opus-free",
                     backend="n8n_orchestrated",
                 )
                 answer = n8n_res.get("response", "")
@@ -2659,6 +2729,30 @@ if user_input := user_input.strip() if isinstance(user_input, str) else None:
             except Exception as exc:
                 state["error_occurred"] = True
                 state["error_message"] = f"n8n Orchestration Error: {exc}"
+                yield _clean_streaming(str(exc))
+    elif backend == "groq_gemini":
+        def streaming_generator():
+            """Call Groq, fall back to Gemini, and typewrite the result."""
+            state = st.session_state._stream_state
+            try:
+                api_messages = (
+                    [{"role": "system", "content": SYSTEM_PROMPT}]
+                    + history_for_prompt
+                    + [{"role": "user", "content": augmented_user_msg}]
+                )
+                full_text = get_chat_response(api_messages)
+                state["captured_tokens"].append(full_text)
+                # Typewriter effect
+                words = full_text.split(" ")
+                for word in words:
+                    piece = word + " "
+                    cleaned_piece = _clean_streaming(piece)
+                    if cleaned_piece:
+                        yield cleaned_piece
+                    time.sleep(0.03)
+            except Exception as exc:
+                state["error_occurred"] = True
+                state["error_message"] = str(exc)
                 yield _clean_streaming(str(exc))
     else:
         def streaming_generator():

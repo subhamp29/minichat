@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+*.log
+
+# Node / npm
+node_modules/
+npm-debug.log*
+
+# HuggingFace cache
+.model_cache/
+
+# Databases
+*.sqlite
+*.db
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# n8n / local services
+ngrok*.exe
+*.old
+a.log
+c.log
+dl.log
+dl3.log
+ef.log
+fp16.log
+fp32_head.log
+fp32_head_test.log
+fullram.log
+fullram_bf16_test.log
+gemm_test.log
+h.log
+inspect_embed.log
+inspect_embed_fix.log
+l.log
+load_test.log
+load_test2.log
+lora-probe/
+matmul_test.log
+mt.log
+probe.log
+steptest.log
+train.log
+v.log
+writable_bf16.log
