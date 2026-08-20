@@ -19,6 +19,7 @@ npm-debug.log*
 # Databases
 *.sqlite
 *.db
+chat_history.db
 
 # Environment / secrets
 .env
