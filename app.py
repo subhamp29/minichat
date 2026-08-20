@@ -15,6 +15,9 @@ import streamlit as st
 import streamlit.components.v1 as components
 from huggingface_hub import hf_hub_download
 from llama_cpp import Llama
+from dotenv import load_dotenv
+
+load_dotenv()
 from router_client import (
     RouterConfigurationError,
     RouterError,
@@ -52,19 +55,32 @@ def get_chat_response(messages: str) -> str:
         api_key = _os.environ.get("GEMINI_API_KEY")
         if not api_key:
             raise ValueError("GEMINI_API_KEY not set")
-        url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
-        payload = {
-            "model": "gemini-2.0-flash",
-            "messages": messages,
-            "temperature": 0.7,
-        }
-        response = _requests.post(url, json=payload, headers=headers, timeout=20)
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key={api_key}"
+        # Convert OpenAI-style messages to Gemini contents format.
+        # Gemini does NOT support "system" role in contents; use
+        # systemInstruction instead.
+        contents = []
+        system_instruction = None
+        for msg in messages:
+            role = msg.get("role", "user")
+            text = msg.get("content", "")
+            if role == "system":
+                system_instruction = text
+                continue
+            if role == "assistant":
+                role = "model"
+            contents.append({
+                "role": role,
+                "parts": [{"text": text}],
+            })
+        payload = {"contents": contents}
+        if system_instruction:
+            payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+        response = _requests.post(url, json=payload, timeout=20)
+        if not response.ok:
+            raise RuntimeError(f"Gemini {response.status_code}: {response.text[:300]}")
+        data = response.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
 
     providers = [
         ("Groq", call_groq),
@@ -80,7 +96,7 @@ def get_chat_response(messages: str) -> str:
             last_error = e
             continue
 
-    raise RuntimeError(f"All providers failed. Last error: {last_error}")
+    raise RuntimeError(f"All providers failed. Last error: {_clean_streaming(str(last_error))}")
 
 
 # n8n Supabase client is optional — only needed for the n8n_orchestrated backend.
@@ -98,7 +114,13 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-_MODEL_OPTIONS_BASE = {
+MODEL_OPTIONS = {
+    "Groq + Gemini Fallback (Cloud)": {
+        "backend": "groq_gemini",
+        "n_ctx": 8192,
+        "template": "phi3",
+        "description": "Primary: Groq llama-3.3-70b | Fallback: Google Gemini 3.5 Flash-Lite",
+    },
     "Qwen2.5 0.5B (Q4_K_M) - Ultra Fast": {
         "backend": "local_gguf",
         "repo": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
@@ -107,80 +129,6 @@ _MODEL_OPTIONS_BASE = {
         "template": "chatml",
         "description": "⚡ Ultra fast (~400MB RAM). Works smoothly on any device without memory errors.",
     },
-    "Qwen2.5 1.5B (Q4_K_M) - Fast & Smart": {
-        "backend": "local_gguf",
-        "repo": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
-        "file": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
-        "n_ctx": 4096,
-        "template": "chatml",
-        "description": "🚀 Excellent balance of intelligence and low RAM usage (~1GB RAM).",
-    },
-    "Llama-3.2 1B Instruct (Q4_K_M)": {
-        "backend": "local_gguf",
-        "repo": "bartowski/Llama-3.2-1B-Instruct-GGUF",
-        "file": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
-        "n_ctx": 4096,
-        "template": "llama3",
-        "description": "🦙 Meta's compact 1B model. High quality instruction following (~850MB RAM).",
-    },
-    "Phi-3 Mini 4K (Q4)": {
-        "backend": "local_gguf",
-        "repo": "microsoft/Phi-3-mini-4k-instruct-gguf",
-        "file": "Phi-3-mini-4k-instruct-q4.gguf",
-        "n_ctx": 4096,
-        "template": "phi3",
-        "description": "Fast 3.8B model. Requires ~3.5GB+ RAM.",
-    },
-    "Llama-3.2-3B-Instruct (Q4)": {
-        "backend": "local_gguf",
-        "repo": "QuantFactory/Llama-3.2-3B-Instruct-GGUF",
-        "file": "Llama-3.2-3B-Instruct.Q4_K_M.gguf",
-        "n_ctx": 4096,
-        "template": "llama3",
-        "description": "Meta's compact 3B model. Great for instruction following (~3GB RAM).",
-    },
-    "Qwen2.5-3B-Instruct (Q4)": {
-        "backend": "local_gguf",
-        "repo": "Qwen/Qwen2.5-3B-Instruct-GGUF",
-        "file": "qwen2.5-3b-instruct-q4.gguf",
-        "n_ctx": 4096,
-        "template": "chatml",
-        "description": "Alibaba's versatile 3B model. Strong multilingual support.",
-    },
-}
-
-MODEL_OPTIONS = dict(_MODEL_OPTIONS_BASE)
-
-# ---------------------------------------------------------------------------
-# Remote models
-# ---------------------------------------------------------------------------
-
-# Static fallback so claude-opus-free is always selectable even if ROUTER_MODELS
-# is not configured.
-MODEL_OPTIONS["Remote: claude-opus-free"] = {
-    "backend": "remote",
-    "slug": "claude-opus-free",
-    "n_ctx": 8192,
-    "template": "phi3",
-    "description": "Remote combo model via router (claude-opus-free)",
-}
-
-_remote_slugs = _get_available_models()
-for _slug in _remote_slugs:
-    MODEL_OPTIONS[f"Remote: {_slug}"] = {
-        "backend": "remote",
-        "slug": _slug,
-        "n_ctx": 8192,
-        "template": "phi3",
-        "description": f"Remote model via router ({_slug})",
-    }
-
-# Groq + Gemini fallback cloud backend
-MODEL_OPTIONS["Groq + Gemini Fallback (Cloud)"] = {
-    "backend": "groq_gemini",
-    "n_ctx": 8192,
-    "template": "phi3",
-    "description": "Primary: Groq llama-3.3-70b | Fallback: Google Gemini 2.0 Flash",
 }
 
 DEFAULT_MODEL_KEY = os.environ.get("DEFAULT_MODEL_KEY", "Qwen2.5 0.5B (Q4_K_M) - Ultra Fast")
@@ -417,6 +365,12 @@ def _strip_environment_details(text: str) -> str:
     Uses simple string splitting so it is immune to newlines, attributes,
     capitalization variations, or regex flag gotchas.
     """
+    # Regex safety net: catch any tag variants that string splitting missed.
+    text = re.sub(
+        r"(?is)<environment_details[^>]*>.*?</environment_details\s*>",
+        "",
+        text,
+    )
     result = []
     i = 0
     text_lower = text.lower()
@@ -429,9 +383,7 @@ def _strip_environment_details(text: str) -> str:
         if end == -1:
             # Unclosed tag — discard from here to the end of text
             break
-        # Keep text before the opening tag
         result.append(text[i:start])
-        # Skip past the closing tag
         i = end + len("</environment_details>")
     return "".join(result)
 
@@ -1917,7 +1869,7 @@ def ensure_model(model_key: str):
 def load_model(model_key: str):
     # Remote & n8n models don't need a local Llama instance.
     model_config = MODEL_OPTIONS.get(model_key, {})
-    if model_config.get("backend") in ("remote", "n8n_orchestrated"):
+    if model_config.get("backend") in ("remote", "n8n_orchestrated", "groq_gemini"):
         return None
 
     # Safety check: if model_key is invalid or missing, default
@@ -2741,14 +2693,20 @@ if user_input := user_input.strip() if isinstance(user_input, str) else None:
                     + [{"role": "user", "content": augmented_user_msg}]
                 )
                 full_text = get_chat_response(api_messages)
+                # Clean the FULL response before typewriting. If we clean
+                # per-word after split(" "), a <environment_details>...</environment_details>
+                # block gets fragmented and the inner content + closing tag
+                # leak through as separate words.
+                full_text = _clean_streaming(full_text)
+                if not full_text:
+                    full_text = "*(no response)*"
                 state["captured_tokens"].append(full_text)
                 # Typewriter effect
                 words = full_text.split(" ")
                 for word in words:
                     piece = word + " "
-                    cleaned_piece = _clean_streaming(piece)
-                    if cleaned_piece:
-                        yield cleaned_piece
+                    if piece.strip():
+                        yield piece
                     time.sleep(0.03)
             except Exception as exc:
                 state["error_occurred"] = True
@@ -2796,6 +2754,15 @@ if user_input := user_input.strip() if isinstance(user_input, str) else None:
     for token in streaming_generator():
         accumulated_stream += token
         display_text = _clean_streaming(accumulated_stream)
+        # Final HTML-level safety net: aggressively strip any leaked
+        # <environment_details>...</environment_details> blocks before
+        # rendering into the DOM. This catches fragments that survived
+        # upstream cleaners due to tag-splitting across word boundaries.
+        display_text = re.sub(
+            r"(?is)<environment_details[^>]*>.*?</environment_details\s*>",
+            "",
+            display_text,
+        )
         content_html = escape(display_text).replace("\n", "<br>")
         chat_placeholder.markdown(
             f"""
