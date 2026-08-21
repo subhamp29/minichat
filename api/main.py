@@ -624,7 +624,7 @@ async def get_stats(user: dict = Depends(get_current_user)):
     messages = await _supabase_rest_get(
         "messages",
         user_token,
-        params={"select": "role,model,token_count,response_ms,created_at", "user_id": f"eq.{user_id}"},
+        params={"select": "role,model,backend,created_at", "user_id": f"eq.{user_id}"},
     )
     if not isinstance(messages, list):
         messages = []
@@ -761,3 +761,4 @@ def trust_probe():
     events = get_trust_events(cwd)
     trusted = check_trust(cwd)
     return {"cwd": cwd, "trusted": trusted, "events": events}
+# test reload
