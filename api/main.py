@@ -16,6 +16,8 @@ import sys
 import json
 import time
 import uuid
+import urllib.request
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -704,29 +706,44 @@ async def get_stats(user: dict = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 # 9. GET /api/trending
 # ---------------------------------------------------------------------------
+
+_trending_cache: dict = {"data": None, "fetched_at": 0}
+_TRENDING_CACHE_TTL = 600  # 10 minutes
+
 @app.get("/api/trending")
 async def get_trending(limit: int = 6, user: dict = Depends(get_current_user)):
-    """Return the most common conversation titles as trending topics."""
-    user_token = user["token"]
-    user_id = user["payload"].get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid user token")
+    """Return today's trending searches in India, from Google Trends RSS."""
+    now = time.time()
+    if _trending_cache["data"] and (now - _trending_cache["fetched_at"] < _TRENDING_CACHE_TTL):
+        return {"topics": _trending_cache["data"][:limit]}
 
-    rows = await _supabase_rest_get(
-        "conversations",
-        user_token,
-        params={"select": "title", "user_id": f"eq.{user_id}"},
-    )
-    if not isinstance(rows, list):
-        rows = []
+    url = "https://trends.google.com/trends/trendingsearches/daily/rss?geo=IN"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            xml_bytes = resp.read()
 
-    from collections import Counter
-    counter = Counter((row.get("title") or "").strip() for row in rows if row.get("title"))
-    topics = [
-        {"label": title, "count": count}
-        for title, count in counter.most_common(int(limit))
-    ]
-    return {"topics": topics}
+        root = ET.fromstring(xml_bytes)
+        ns = {"ht": "https://trends.google.com/trends/trendingsearches/daily"}
+
+        topics = []
+        for item in root.findall(".//item"):
+            title_el = item.find("title")
+            traffic_el = item.find("ht:approx_traffic", ns)
+            if title_el is None or not title_el.text:
+                continue
+            traffic_text = traffic_el.text if traffic_el is not None else None
+            topics.append({"label": title_el.text.strip(), "traffic": traffic_text})
+
+        _trending_cache["data"] = topics
+        _trending_cache["fetched_at"] = now
+        return {"topics": topics[:limit]}
+
+    except Exception:
+        # Fall back to stale cache if available, else empty list
+        if _trending_cache["data"]:
+            return {"topics": _trending_cache["data"][:limit]}
+        return {"topics": []}
 
 
 # ---------------------------------------------------------------------------
