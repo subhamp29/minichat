@@ -1,0 +1,348 @@
+{
+  "name": "MiniChat - Supabase & Router Full Orchestration",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "chat",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        100,
+        300
+      ],
+      "id": "node-webhook-trigger",
+      "name": "Webhook Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract incoming message parameters from Streamlit\nconst body = $input.item.json.body || $input.item.json;\nconst conversationId = body.conversation_id || 'default-session';\nconst userMessage = body.message || '';\nconst model = body.model || 'claude-opus-free';\nconst backend = body.backend || 'n8n_orchestrated';\nconst title = body.title || userMessage.substring(0, 30) || 'New Chat';\n\nreturn [{\n  json: {\n    conversation_id: conversationId,\n    message: userMessage,\n    model: model,\n    backend: backend,\n    title: title,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        320,
+        300
+      ],
+      "id": "node-extract-input",
+      "name": "Extract Input"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/conversations",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"id\": \"{{ $json.conversation_id }}\",\n  \"title\": \"{{ $json.title }}\",\n  \"updated_at\": \"{{ $json.timestamp }}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        540,
+        300
+      ],
+      "id": "node-upsert-conversation",
+      "name": "Upsert Conversation in Supabase"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"conversation_id\": \"{{ $('Extract Input').item.json.conversation_id }}\",\n  \"role\": \"user\",\n  \"content\": \"{{ $('Extract Input').item.json.message }}\",\n  \"model\": \"{{ $('Extract Input').item.json.model }}\",\n  \"backend\": \"{{ $('Extract Input').item.json.backend }}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        760,
+        300
+      ],
+      "id": "node-save-user-message",
+      "name": "Save User Message in Supabase"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/messages?conversation_id=eq.{{ $('Extract Input').item.json.conversation_id }}&order=created_at.asc&limit=20",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.SUPABASE_KEY }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        980,
+        300
+      ],
+      "id": "node-fetch-history",
+      "name": "Fetch History from Supabase"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Construct full messages array for Router LLM endpoint\nconst historyItems = $input.all();\nconst systemPrompt = \"You are Bhavyam AI, an AI assistant created and owned by Subham Mahapatra, based in Odisha, India.\";\n\nconst messages = [\n  { role: \"system\", content: systemPrompt }\n];\n\nfor (const item of historyItems) {\n  const row = item.json;\n  if (row && row.role && row.content) {\n    messages.push({\n      role: row.role,\n      content: row.content\n    });\n  }\n}\n\nconst extractData = $('Extract Input').item.json;\n\nreturn [{\n  json: {\n    conversation_id: extractData.conversation_id,\n    model: extractData.model,\n    backend: extractData.backend,\n    formatted_messages: messages\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        300
+      ],
+      "id": "node-format-history",
+      "name": "Format History for Router"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ROUTER_BASE_URL }}/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.ROUTER_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"{{ $json.model }}\",\n  \"messages\": {{ JSON.stringify($json.formatted_messages) }},\n  \"temperature\": 0.7,\n  \"max_tokens\": 512,\n  \"stream\": false\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1420,
+        300
+      ],
+      "id": "node-call-router",
+      "name": "Call Router LLM"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse assistant text response from Router LLM\nconst routerResp = $input.item.json;\nlet assistantReply = \"\";\n\nif (routerResp.choices && routerResp.choices.length > 0) {\n  const choice = routerResp.choices[0];\n  if (choice.message && choice.message.content) {\n    assistantReply = choice.message.content;\n  } else if (choice.text) {\n    assistantReply = choice.text;\n  }\n} else if (routerResp.output) {\n  assistantReply = typeof routerResp.output === 'string' ? routerResp.output : JSON.stringify(routerResp.output);\n} else {\n  assistantReply = \"No response text generated from router.\";\n}\n\nconst formatData = $('Format History for Router').item.json;\n\nreturn [{\n  json: {\n    conversation_id: formatData.conversation_id,\n    model: formatData.model,\n    backend: formatData.backend,\n    assistant_reply: assistantReply\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1640,
+        300
+      ],
+      "id": "node-parse-router-response",
+      "name": "Parse Router Response"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"conversation_id\": \"{{ $json.conversation_id }}\",\n  \"role\": \"assistant\",\n  \"content\": \"{{ $json.assistant_reply.replace(/\"/g, '\\\\\"').replace(/\\n/g, '\\\\n') }}\",\n  \"model\": \"{{ $json.model }}\",\n  \"backend\": \"n8n_orchestrated\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1860,
+        300
+      ],
+      "id": "node-save-assistant-message",
+      "name": "Save Assistant Message in Supabase"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"success\",\n  \"conversation_id\": \"{{ $('Parse Router Response').item.json.conversation_id }}\",\n  \"response\": \"{{ $('Parse Router Response').item.json.assistant_reply }}\",\n  \"model\": \"{{ $('Parse Router Response').item.json.model }}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2080,
+        300
+      ],
+      "id": "node-respond-webhook",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Input": {
+      "main": [
+        [
+          {
+            "node": "Upsert Conversation in Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Conversation in Supabase": {
+      "main": [
+        [
+          {
+            "node": "Save User Message in Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save User Message in Supabase": {
+      "main": [
+        [
+          {
+            "node": "Fetch History from Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch History from Supabase": {
+      "main": [
+        [
+          {
+            "node": "Format History for Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format History for Router": {
+      "main": [
+        [
+          {
+            "node": "Call Router LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Router LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse Router Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Router Response": {
+      "main": [
+        [
+          {
+            "node": "Save Assistant Message in Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Assistant Message in Supabase": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}
