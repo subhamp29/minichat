@@ -76,14 +76,14 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://bhavyam-frontend.vercel.app",
         "http://localhost:3000",
         "http://localhost:3001",
         "http://localhost:5173",
         "http://localhost:8080",
-        "https://bhavyam-frontend.vercel.app",
     ],
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_credentials=True,
+    allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
