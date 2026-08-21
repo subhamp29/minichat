@@ -60,6 +60,7 @@ except ImportError:
     class N8nOrchestrationError(Exception):  # pragma: no cover - fallback
         """Fallback when n8n_supabase_client is not installed."""
     _N8N_CLIENT_AVAILABLE = False
+    send_to_n8n_webhook = None
 
 
 # ---------------------------------------------------------------------------
