@@ -78,6 +78,7 @@ app.add_middleware(
         "http://localhost:3001",
         "http://localhost:5173",
         "http://localhost:8080",
+        "https://bhavyam-frontend.vercel.app",
     ],
     allow_credentials=False,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
