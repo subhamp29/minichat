@@ -31,6 +31,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
+try:
+    from pypdf import PdfReader
+    _PYPDF_AVAILABLE = True
+except ImportError:
+    _PYPDF_AVAILABLE = False
+
 # Make this package importable regardless of CWD.
 _API_DIR = str(Path(__file__).resolve().parent)
 if _API_DIR not in sys.path:
@@ -210,6 +216,8 @@ class ChatRequest(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=0.95, ge=0.0, le=1.0)
     max_tokens: int = Field(default=512, ge=1, le=4096)
+    file_text: str | None = Field(default=None, description="Optional extracted text from an uploaded file.")
+    file_name: str | None = Field(default=None, description="Optional original filename for context.")
 
 
 class ConversationCreateResponse(BaseModel):
@@ -343,6 +351,8 @@ def _stream_chat_events(
     max_tokens: int,
     user_token: str | None = None,
     user_id: str | None = None,
+    file_text: str | None = None,
+    file_name: str | None = None,
 ):
     """Yield SSE event dicts while streaming the model response.
 
@@ -387,6 +397,14 @@ def _stream_chat_events(
     stop_sequences = CHAT_TEMPLATES[template]["stop"]
 
     augmented_user_msg = user_message
+    if file_text:
+        processed_text = file_text
+        if file_name and file_name.lower().endswith(".pdf"):
+            extracted = _extract_pdf_text(file_text)
+            if extracted:
+                processed_text = extracted
+        prefix = f"[Attached file: {file_name or 'uploaded_file'}]\n```\n{processed_text}\n```\n\n"
+        augmented_user_msg = prefix + user_message
     history_for_prompt = trim_history(history, SYSTEM_PROMPT, augmented_user_msg, template)
 
     # ----- remote (router_client.stream_chat) -----
@@ -555,6 +573,8 @@ def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
             temperature=req.temperature,
             top_p=req.top_p,
             max_tokens=req.max_tokens,
+            file_text=req.file_text,
+            file_name=req.file_name,
         ):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
@@ -622,6 +642,20 @@ def _get_db_size_mb() -> float | None:
             except OSError:
                 return None
     return None
+
+
+def _extract_pdf_text(base64_data: str) -> str | None:
+    """Extract text from a PDF provided as base64 string."""
+    if not _PYPDF_AVAILABLE:
+        return None
+    try:
+        import base64
+        import io
+        pdf_bytes = base64.b64decode(base64_data)
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+    except Exception:
+        return None
 
 
 @app.get("/api/stats")
