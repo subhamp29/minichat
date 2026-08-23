@@ -22,6 +22,8 @@ create table if not exists public.messages (
   backend text not null check (backend in ('remote','local_gguf','n8n','n8n_orchestrated')),
   tokens_in integer,
   tokens_out integer,
+  token_count integer,
+  response_ms integer,
   created_at timestamptz not null default now()
 );
 

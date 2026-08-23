@@ -530,7 +530,14 @@ def _stream_chat_events(
         # Note: conversation persistence is now handled by the frontend via Supabase.
         # The Streamlit app (app.py) still uses save_conversation/insert_message
         # from chat_core.py for its own SQLite storage.
-        yield {"done": True, "conversation_id": conversation_id, "model_id": model_id}
+        response_ms = int((time.time() - start_time) * 1000)
+        yield {
+            "done": True,
+            "conversation_id": conversation_id,
+            "model_id": model_id,
+            "response_ms": response_ms,
+            "token_count": state.get("token_count"),
+        }
     elif not emitted_error:
         yield {"error": state.get("error_message", "Unknown error")}
 
@@ -601,6 +608,22 @@ async def export_conversation(conversation_id: str, user: dict = Depends(get_cur
 # ---------------------------------------------------------------------------
 # 8. GET /api/stats
 # ---------------------------------------------------------------------------
+
+def _get_db_size_mb() -> float | None:
+    """Return chat_history.db size in MB, or None if missing."""
+    candidates = [
+        Path("chat_history.db"),
+        Path(__file__).resolve().parent.parent / "chat_history.db",
+    ]
+    for path in candidates:
+        if path.exists():
+            try:
+                return round(path.stat().st_size / (1024 * 1024), 2)
+            except OSError:
+                return None
+    return None
+
+
 @app.get("/api/stats")
 async def get_stats(user: dict = Depends(get_current_user)):
     """Aggregate stats for the future 3D dashboard.
@@ -624,7 +647,7 @@ async def get_stats(user: dict = Depends(get_current_user)):
     messages = await _supabase_rest_get(
         "messages",
         user_token,
-        params={"select": "role,model,backend,created_at", "user_id": f"eq.{user_id}"},
+        params={"select": "role,model,backend,created_at,response_ms,token_count", "user_id": f"eq.{user_id}"},
     )
     if not isinstance(messages, list):
         messages = []
@@ -694,7 +717,7 @@ async def get_stats(user: dict = Depends(get_current_user)):
     return {
         "total_conversations": total_conversations,
         "total_messages": total_messages,
-        "db_size_mb": None,
+        "db_size_mb": _get_db_size_mb(),
         "messages_by_role": messages_by_role,
         "messages_by_model": messages_by_model,
         "messages_per_day": list(per_day.values()),

@@ -46,6 +46,8 @@ def init_db():
             backend TEXT NOT NULL,
             tokens_in INTEGER DEFAULT 0,
             tokens_out INTEGER DEFAULT 0,
+            token_count INTEGER,
+            response_ms INTEGER,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         )
