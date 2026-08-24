@@ -23,6 +23,10 @@ COPY . .
 # Force install critical packages in a separate layer to avoid Docker cache issues.
 RUN pip install --no-cache-dir python-multipart==0.0.18 python-docx>=1.1.0
 
+# Verify installation in the image.
+RUN python -c "import multipart; print('MULTIPART INSTALLED:', multipart.__file__)"
+RUN python -c "import docx; print('DOCX INSTALLED:', docx.__file__)"
+
 # Make entrypoint executable
 RUN chmod +x entrypoint.sh
 
