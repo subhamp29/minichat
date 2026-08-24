@@ -20,6 +20,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application
 COPY . .
 
+# Force install critical packages in a separate layer to avoid Docker cache issues.
+RUN pip install --no-cache-dir python-multipart==0.0.18 python-docx>=1.1.0
+
 # Make entrypoint executable
 RUN chmod +x entrypoint.sh
 
