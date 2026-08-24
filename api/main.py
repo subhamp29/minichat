@@ -681,6 +681,8 @@ async def chat(
                 pass
 
     def event_generator():
+        user_token = user.get("token")
+        user_id = user.get("payload", {}).get("sub")
         for event in _stream_chat_events(
             conversation_id=conversation_id,
             user_message=message,
@@ -690,8 +692,8 @@ async def chat(
             max_tokens=max_tokens,
             file_text=file_text,
             file_name=file_name,
-            user_token=user.get("token"),
-            user_id=user.get("id"),
+            user_token=user_token,
+            user_id=user_id,
         ):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
