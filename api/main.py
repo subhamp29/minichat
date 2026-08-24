@@ -405,6 +405,12 @@ def _stream_chat_events(
                 processed_text = extracted
         prefix = f"[Attached file: {file_name or 'uploaded_file'}]\n```\n{processed_text}\n```\n\n"
         augmented_user_msg = prefix + user_message
+
+        # Hard cleanup: discard uploaded bytes after prompt construction.
+        # These values must never be written to Supabase, SQLite, or logs.
+        file_text = None  # type: ignore[assignment]
+        processed_text = None  # type: ignore[assignment]
+        prefix = None  # type: ignore[assignment]
     history_for_prompt = trim_history(history, SYSTEM_PROMPT, augmented_user_msg, template)
 
     # ----- remote (router_client.stream_chat) -----
