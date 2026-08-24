@@ -26,7 +26,15 @@ import jwt
 from jwt.algorithms import ECAlgorithm
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Depends,
+    Request,
+    UploadFile,
+    File,
+    Form,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, PlainTextResponse
 from pydantic import BaseModel, Field
@@ -36,6 +44,12 @@ try:
     _PYPDF_AVAILABLE = True
 except ImportError:
     _PYPDF_AVAILABLE = False
+
+try:
+    from docx import Document
+    _DOCX_AVAILABLE = True
+except ImportError:
+    _DOCX_AVAILABLE = False
 
 # Make this package importable regardless of CWD.
 _API_DIR = str(Path(__file__).resolve().parent)
@@ -210,14 +224,12 @@ async def _supabase_rest(method: str, path: str, user_token: str, json_data: dic
 # Request / response models
 # ---------------------------------------------------------------------------
 class ChatRequest(BaseModel):
-    conversation_id: str = Field(default="", description="Existing conversation id, or empty to start a new one.")
-    message: str = Field(..., min_length=1, description="The user's message.")
-    model_id: str = Field(..., description="Model id from GET /api/models.")
-    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    top_p: float = Field(default=0.95, ge=0.0, le=1.0)
-    max_tokens: int = Field(default=512, ge=1, le=4096)
-    file_text: str | None = Field(default=None, description="Optional extracted text from an uploaded file.")
-    file_name: str | None = Field(default=None, description="Optional original filename for context.")
+    conversation_id: str = ""
+    message: str
+    model_id: str
+    temperature: float = 0.7
+    top_p: float = 0.95
+    max_tokens: int = 512
 
 
 class ConversationCreateResponse(BaseModel):
@@ -397,20 +409,23 @@ def _stream_chat_events(
     stop_sequences = CHAT_TEMPLATES[template]["stop"]
 
     augmented_user_msg = user_message
+
     if file_text:
-        processed_text = file_text
-        if file_name and file_name.lower().endswith(".pdf"):
-            extracted = _extract_pdf_text(file_text)
-            if extracted:
-                processed_text = extracted
-        prefix = f"[Attached file: {file_name or 'uploaded_file'}]\n```\n{processed_text}\n```\n\n"
+        prefix = (
+            f"[Attached file: {file_name or 'uploaded_file'}]\n"
+            "The following is the extracted text from the uploaded file:\n"
+            "```\n"
+            f"{file_text}\n"
+            "```\n\n"
+        )
+
         augmented_user_msg = prefix + user_message
 
-        # Hard cleanup: discard uploaded bytes after prompt construction.
-        # These values must never be written to Supabase, SQLite, or logs.
-        file_text = None  # type: ignore[assignment]
-        processed_text = None  # type: ignore[assignment]
-        prefix = None  # type: ignore[assignment]
+        # Explicitly discard the temporary extracted text after
+        # constructing the model prompt.
+        file_text = None
+        prefix = None
+
     history_for_prompt = trim_history(history, SYSTEM_PROMPT, augmented_user_msg, template)
 
     # ----- remote (router_client.stream_chat) -----
@@ -567,27 +582,127 @@ def _stream_chat_events(
 
 
 @app.post("/api/chat")
-def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
-    """Stream the assistant's reply as Server-Sent Events."""
-    conversation_id = req.conversation_id.strip() or str(uuid.uuid4())
+async def chat(
+    conversation_id: str = Form(default=""),
+    message: str = Form(...),
+    model_id: str = Form(...),
+    temperature: float = Form(default=0.7),
+    top_p: float = Form(default=0.95),
+    max_tokens: int = Form(default=512),
+    file: UploadFile | None = File(default=None),
+    user: dict = Depends(get_current_user),
+):
+    """Stream the assistant's reply.
+
+    Uploaded files are processed only for this request and are never
+    persisted to Supabase, SQLite, or disk.
+    """
+
+    conversation_id = conversation_id.strip() or str(uuid.uuid4())
+
+    file_text: str | None = None
+    file_name: str | None = None
+
+    if file is not None:
+        file_name = file.filename or "uploaded_file"
+
+        try:
+            file_bytes = await file.read()
+
+            if not file_bytes:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Uploaded file is empty.",
+                )
+
+            lower_name = file_name.lower()
+
+            # PDF
+            if (
+                file.content_type == "application/pdf"
+                or lower_name.endswith(".pdf")
+            ):
+                file_text = _extract_pdf_text(file_bytes)
+
+                if not file_text:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Could not extract readable text from this PDF.",
+                    )
+
+            # DOCX
+            elif (
+                file.content_type
+                == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                or lower_name.endswith(".docx")
+            ):
+                file_text = _extract_docx_text(file_bytes)
+
+                if not file_text:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Could not extract readable text from this DOCX file.",
+                    )
+
+            # Plain text
+            elif (
+                file.content_type == "text/plain"
+                or lower_name.endswith(".txt")
+            ):
+                try:
+                    file_text = file_bytes.decode("utf-8")
+                except UnicodeDecodeError:
+                    file_text = file_bytes.decode("utf-8", errors="replace")
+
+                file_text = file_text.strip()
+
+                if not file_text:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="The text file is empty.",
+                    )
+
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Unsupported document type. "
+                        "Supported documents: PDF, DOCX, TXT."
+                    ),
+                )
+
+        finally:
+            # Explicitly release references.
+            file_bytes = None
+
+            try:
+                await file.close()
+            except Exception:
+                pass
 
     def event_generator():
         for event in _stream_chat_events(
             conversation_id=conversation_id,
-            user_message=req.message,
-            model_id=req.model_id,
-            temperature=req.temperature,
-            top_p=req.top_p,
-            max_tokens=req.max_tokens,
-            file_text=req.file_text,
-            file_name=req.file_name,
+            user_message=message,
+            model_id=model_id,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            file_text=file_text,
+            file_name=file_name,
+            user_token=user.get("token"),
+            user_id=user.get("id"),
         ):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
+    # Do not retain file data after constructing the generator.
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -650,17 +765,56 @@ def _get_db_size_mb() -> float | None:
     return None
 
 
-def _extract_pdf_text(base64_data: str) -> str | None:
-    """Extract text from a PDF provided as base64 string."""
+def _extract_pdf_text(file_bytes: bytes) -> str | None:
+    """Extract text from PDF bytes in memory.
+
+    The uploaded file is never written to disk or persisted.
+    """
     if not _PYPDF_AVAILABLE:
         return None
+
     try:
-        import base64
         import io
-        pdf_bytes = base64.b64decode(base64_data)
-        reader = PdfReader(io.BytesIO(pdf_bytes))
-        return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
-    except Exception:
+
+        reader = PdfReader(io.BytesIO(file_bytes))
+
+        text = "\n".join(
+            page.extract_text() or ""
+            for page in reader.pages
+        ).strip()
+
+        return text or None
+
+    except Exception as exc:
+        print(f"PDF extraction error: {exc}")
+        return None
+
+
+def _extract_docx_text(file_bytes: bytes) -> str | None:
+    """Extract text from DOCX bytes in memory.
+
+    The uploaded file is never written to disk or persisted.
+    """
+    if not _DOCX_AVAILABLE:
+        return None
+
+    try:
+        import io
+
+        document = Document(io.BytesIO(file_bytes))
+
+        paragraphs = [
+            paragraph.text
+            for paragraph in document.paragraphs
+            if paragraph.text.strip()
+        ]
+
+        text = "\n".join(paragraphs).strip()
+
+        return text or None
+
+    except Exception as exc:
+        print(f"DOCX extraction error: {exc}")
         return None
 
 
