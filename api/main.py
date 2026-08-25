@@ -122,6 +122,9 @@ ALLOWED_IMAGE_TYPES = {
 }
 MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 
+# Maximum extracted document text sent to the model (safety ceiling).
+MAX_DOCUMENT_TEXT_CHARS = 120_000
+
 
 # ---------------------------------------------------------------------------
 # Supabase JWT auth
@@ -469,6 +472,36 @@ def _normalize_image(file_bytes: bytes) -> tuple[bytes, str]:
         ) from exc
 
 
+def _optimize_document_text(text: str) -> str:
+    """Reduce unnecessary document text overhead before sending to the model."""
+    import re
+
+    # Normalize line endings.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # Remove excessive spaces/tabs.
+    text = re.sub(r"[ \t]+", " ", text)
+
+    # Remove excessive blank lines.
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    text = text.strip()
+
+    if len(text) > MAX_DOCUMENT_TEXT_CHARS:
+        print(
+            f"[DOCUMENT] Text truncated: "
+            f"{len(text)} → {MAX_DOCUMENT_TEXT_CHARS} characters",
+            flush=True,
+        )
+
+        text = (
+            text[:MAX_DOCUMENT_TEXT_CHARS]
+            + "\n\n[Document text truncated for processing.]"
+        )
+
+    return text
+
+
 def _stream_chat_events(
     conversation_id: str,
     user_message: str,
@@ -788,6 +821,8 @@ async def chat(
                         detail="Could not extract readable text from this PDF.",
                     )
 
+                file_text = _optimize_document_text(file_text)
+
             # --- DOCX ---
             elif (
                 content_type
@@ -809,6 +844,8 @@ async def chat(
                         status_code=400,
                         detail="Could not extract readable text from this DOCX.",
                     )
+
+                file_text = _optimize_document_text(file_text)
 
             # --- TXT ---
             elif (
@@ -835,6 +872,8 @@ async def chat(
                         status_code=400,
                         detail="The text file is empty.",
                     )
+
+                file_text = _optimize_document_text(file_text)
 
             else:
                 raise HTTPException(
@@ -946,55 +985,94 @@ def _get_db_size_mb() -> float | None:
 
 
 def _extract_pdf_text(file_bytes: bytes) -> str | None:
-    """Extract text from PDF bytes in memory.
-
-    The uploaded file is never written to disk or persisted.
-    """
+    """Extract and compact text from a PDF in memory."""
     if not _PYPDF_AVAILABLE:
         return None
 
     try:
         import io
+        import re
 
         reader = PdfReader(io.BytesIO(file_bytes))
 
-        text = "\n".join(
-            page.extract_text() or ""
-            for page in reader.pages
-        ).strip()
+        pages = []
 
-        return text or None
+        for page in reader.pages:
+            text = page.extract_text() or ""
+
+            # Normalize whitespace.
+            text = re.sub(r"[ \t]+", " ", text)
+            text = re.sub(r"\n{3,}", "\n\n", text)
+            text = text.strip()
+
+            if text:
+                pages.append(text)
+
+        extracted = "\n\n".join(pages).strip()
+
+        if not extracted:
+            return None
+
+        print(
+            f"[DOCUMENT] PDF extracted: "
+            f"{len(reader.pages)} pages, "
+            f"{len(file_bytes)} bytes → "
+            f"{len(extracted)} characters",
+            flush=True,
+        )
+
+        return extracted
 
     except Exception as exc:
-        print(f"PDF extraction error: {exc}")
+        print(
+            f"[DOCUMENT] PDF extraction failed: {type(exc).__name__}: {exc}",
+            flush=True,
+        )
         return None
 
 
 def _extract_docx_text(file_bytes: bytes) -> str | None:
-    """Extract text from DOCX bytes in memory.
-
-    The uploaded file is never written to disk or persisted.
-    """
+    """Extract and compact text from a DOCX in memory."""
     if not _DOCX_AVAILABLE:
         return None
 
     try:
         import io
+        import re
 
         document = Document(io.BytesIO(file_bytes))
 
-        paragraphs = [
-            paragraph.text
-            for paragraph in document.paragraphs
-            if paragraph.text.strip()
-        ]
+        paragraphs = []
 
-        text = "\n".join(paragraphs).strip()
+        for paragraph in document.paragraphs:
+            text = paragraph.text.strip()
 
-        return text or None
+            if text:
+                # Collapse unnecessary whitespace.
+                text = re.sub(r"[ \t]+", " ", text)
+                paragraphs.append(text)
+
+        extracted = "\n\n".join(paragraphs).strip()
+
+        if not extracted:
+            return None
+
+        print(
+            f"[DOCUMENT] DOCX extracted: "
+            f"{len(paragraphs)} paragraphs, "
+            f"{len(file_bytes)} bytes → "
+            f"{len(extracted)} characters",
+            flush=True,
+        )
+
+        return extracted
 
     except Exception as exc:
-        print(f"DOCX extraction error: {exc}")
+        print(
+            f"[DOCUMENT] DOCX extraction failed: "
+            f"{type(exc).__name__}: {exc}",
+            flush=True,
+        )
         return None
 
 
