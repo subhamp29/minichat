@@ -405,34 +405,68 @@ async def _read_image_upload(file: UploadFile) -> tuple[bytes, str]:
 
 
 def _normalize_image(file_bytes: bytes) -> tuple[bytes, str]:
-    """Decode, re-encode to clean JPEG, and return (jpeg_bytes, 'image/jpeg').
+    """Normalize uploaded images for faster Gemini Vision processing.
 
-    This ensures Gemini always receives a standard, well-formed JPEG
-    regardless of the original encoding (WebP, HEIC, PNG with alpha,
-    broken metadata from phone cameras, etc.).
+    - Converts any supported image to RGB JPEG.
+    - Resizes images so the longest side is at most 2048px.
+    - Uses JPEG quality 82 to reduce upload/request size.
+    - Keeps smaller images at their original dimensions.
     """
+    MAX_DIMENSION = 2048
+    JPEG_QUALITY = 82
+
     try:
         image = Image.open(io.BytesIO(file_bytes))
-        image.verify()
 
-        image = Image.open(io.BytesIO(file_bytes))
-        image = image.convert("RGB")
+        # Fully decode/validate the image before processing.
+        image.load()
 
+        # Convert to RGB so PNG/WebP/transparency/other modes
+        # are safely converted to a Gemini-compatible JPEG.
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+
+        # Resize only when necessary.
+        width, height = image.size
+        longest_side = max(width, height)
+
+        if longest_side > MAX_DIMENSION:
+            scale = MAX_DIMENSION / longest_side
+            new_width = max(1, int(width * scale))
+            new_height = max(1, int(height * scale))
+
+            image = image.resize(
+                (new_width, new_height),
+                Image.Resampling.LANCZOS,
+            )
+
+        # Encode as optimized JPEG.
         output = io.BytesIO()
+
         image.save(
             output,
             format="JPEG",
-            quality=90,
+            quality=JPEG_QUALITY,
             optimize=True,
         )
 
-        return output.getvalue(), "image/jpeg"
+        normalized_bytes = output.getvalue()
+
+        print(
+            f"[VISION] Image normalized: "
+            f"{width}x{height} -> {image.width}x{image.height}, "
+            f"{len(file_bytes)} -> {len(normalized_bytes)} bytes, "
+            f"MIME=image/jpeg",
+            flush=True,
+        )
+
+        return normalized_bytes, "image/jpeg"
 
     except Exception as exc:
         raise HTTPException(
             status_code=400,
             detail=f"Unable to decode uploaded image: {exc}",
-        )
+        ) from exc
 
 
 def _stream_chat_events(
