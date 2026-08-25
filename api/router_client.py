@@ -53,6 +53,8 @@ def stream_chat(
     top_p: float = 0.95,
     max_tokens: int = 512,
     timeout: int = ROUTER_TIMEOUT,
+    image_bytes: bytes | None = None,
+    image_mime_type: str | None = None,
 ) -> Generator[str, None, None]:
     """Stream text chunks from the remote router.
 
@@ -61,6 +63,8 @@ def stream_chat(
         model_slug: The router model identifier.
         temperature, top_p, max_tokens: Generation parameters.
         timeout: Request timeout in seconds.
+        image_bytes: Optional raw image bytes to send as vision input.
+        image_mime_type: MIME type of the image (e.g. ``image/jpeg``).
 
     Yields:
         Text chunks as they arrive from the server.
@@ -83,6 +87,23 @@ def stream_chat(
         "Content-Type": "application/json",
         "Authorization": f"Bearer {ROUTER_API_KEY}",
     }
+
+    # --- Vision support: convert last user message to OpenAI vision format ---
+    if image_bytes is not None and image_mime_type is not None:
+        import base64 as _b64
+
+        image_b64 = _b64.b64encode(image_bytes).decode("utf-8")
+        data_url = f"data:{image_mime_type};base64,{image_b64}"
+
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                text = msg.get("content", "")
+                msg["content"] = [
+                    {"type": "text", "text": text},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ]
+                break
+
     payload = {
         "model": model_slug,
         "messages": messages,

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sys
 import json
+import base64
 import time
 import uuid
 import urllib.request
@@ -107,6 +108,16 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+# ---------------------------------------------------------------------------
+# Image upload configuration
+# ---------------------------------------------------------------------------
+ALLOWED_IMAGE_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+}
+MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +365,42 @@ async def delete_conversation_by_id(conversation_id: str, user: dict = Depends(g
 # ---------------------------------------------------------------------------
 # 6. POST /api/chat  (Server-Sent Events)
 # ---------------------------------------------------------------------------
+async def _read_image_upload(file: UploadFile) -> tuple[bytes, str]:
+    """Read an uploaded image into memory.
+
+    The image is never written to disk or database.
+    The returned bytes exist only for the current request.
+    """
+
+    if not file.content_type:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not determine image type.",
+        )
+
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported image type. Please upload JPG, PNG, or WebP.",
+        )
+
+    image_bytes = await file.read()
+
+    if not image_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail="The uploaded image is empty.",
+        )
+
+    if len(image_bytes) > MAX_IMAGE_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail="Image is too large. Maximum size is 10 MB.",
+        )
+
+    return image_bytes, file.content_type
+
+
 def _stream_chat_events(
     conversation_id: str,
     user_message: str,
@@ -365,6 +412,8 @@ def _stream_chat_events(
     user_id: str | None = None,
     file_text: str | None = None,
     file_name: str | None = None,
+    image_bytes: bytes | None = None,
+    image_mime_type: str | None = None,
 ):
     """Yield SSE event dicts while streaming the model response.
 
@@ -443,6 +492,8 @@ def _stream_chat_events(
                 temperature=temperature,
                 top_p=top_p,
                 max_tokens=max_tokens,
+                image_bytes=image_bytes,
+                image_mime_type=image_mime_type,
             ):
                 state["captured_tokens"].append(chunk)
                 chunks.append(chunk)
@@ -475,6 +526,9 @@ def _stream_chat_events(
 
     # ----- n8n orchestrated -----
     elif backend == "n8n_orchestrated":
+        if image_bytes is not None:
+            yield {"error": "Image input is not supported through n8n orchestration."}
+            return
         if not _N8N_CLIENT_AVAILABLE:
             state["error_occurred"] = True
             state["error_message"] = (
@@ -516,7 +570,12 @@ def _stream_chat_events(
                 + history_for_prompt
                 + [{"role": "user", "content": augmented_user_msg}]
             )
-            full_text, usage = get_chat_response(api_messages, temperature=temperature)
+            full_text, usage = get_chat_response(
+                api_messages,
+                temperature=temperature,
+                image_bytes=image_bytes,
+                image_mime_type=image_mime_type,
+            )
             full_text = _clean_streaming(full_text)
             if not full_text:
                 full_text = "*(no response)*"
@@ -534,6 +593,12 @@ def _stream_chat_events(
 
     # ----- local GGUF (llama-cpp-python) -----
     else:
+        if image_bytes is not None:
+            yield {
+                "error": "⚠️ Image input is not supported by local models. "
+                         "Please use the Groq + Gemini Fallback model for image analysis."
+            }
+            return
         try:
             model = load_model(model_id)
             if model is None:
@@ -602,26 +667,38 @@ async def chat(
 
     file_text: str | None = None
     file_name: str | None = None
+    image_bytes: bytes | None = None
+    image_mime_type: str | None = None
 
     if file is not None:
         file_name = file.filename or "uploaded_file"
+        content_type = file.content_type or ""
+        lower_name = file_name.lower()
 
         try:
-            file_bytes = await file.read()
+            # --- IMAGE ---
+            if content_type.startswith("image/"):
+                image_bytes, image_mime_type = await _read_image_upload(file)
 
-            if not file_bytes:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Uploaded file is empty.",
-                )
-
-            lower_name = file_name.lower()
-
-            # PDF
-            if (
-                file.content_type == "application/pdf"
+            # --- PDF ---
+            elif (
+                content_type == "application/pdf"
                 or lower_name.endswith(".pdf")
             ):
+                file_bytes = await file.read()
+
+                if not file_bytes:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Uploaded file is empty.",
+                    )
+
+                if len(file_bytes) > 20 * 1024 * 1024:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="PDF is too large. Maximum size is 20 MB.",
+                    )
+
                 file_text = _extract_pdf_text(file_bytes)
 
                 if not file_text:
@@ -630,25 +707,41 @@ async def chat(
                         detail="Could not extract readable text from this PDF.",
                     )
 
-            # DOCX
+            # --- DOCX ---
             elif (
-                file.content_type
+                content_type
                 == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 or lower_name.endswith(".docx")
             ):
+                file_bytes = await file.read()
+
+                if not file_bytes:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Uploaded file is empty.",
+                    )
+
                 file_text = _extract_docx_text(file_bytes)
 
                 if not file_text:
                     raise HTTPException(
                         status_code=400,
-                        detail="Could not extract readable text from this DOCX file.",
+                        detail="Could not extract readable text from this DOCX.",
                     )
 
-            # Plain text
+            # --- TXT ---
             elif (
-                file.content_type == "text/plain"
+                content_type == "text/plain"
                 or lower_name.endswith(".txt")
             ):
+                file_bytes = await file.read()
+
+                if not file_bytes:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Uploaded file is empty.",
+                    )
+
                 try:
                     file_text = file_bytes.decode("utf-8")
                 except UnicodeDecodeError:
@@ -666,13 +759,15 @@ async def chat(
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        "Unsupported document type. "
-                        "Supported documents: PDF, DOCX, TXT."
+                        "Unsupported file type. "
+                        "Supported types: images (JPG, PNG, WebP), PDF, DOCX, TXT."
                     ),
                 )
 
         finally:
-            # Explicitly release references.
+            # Explicitly release the raw file buffer (not image_bytes or
+            # file_text — those are captured by event_generator below and
+            # must remain alive until the streaming generator runs).
             file_bytes = None
 
             try:
@@ -692,6 +787,8 @@ async def chat(
             max_tokens=max_tokens,
             file_text=file_text,
             file_name=file_name,
+            image_bytes=image_bytes,
+            image_mime_type=image_mime_type,
             user_token=user_token,
             user_id=user_id,
         ):

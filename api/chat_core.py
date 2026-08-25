@@ -142,18 +142,31 @@ CHAT_TEMPLATES = {
 
 STOP_SEQUENCES = ["<|end|>", "<|user|>", "<|assistant|>", "<|endoftext|>"]
 
+# Allow up to 60s for image and uploaded-document analysis.
+ANALYSIS_TIMEOUT = 60
+
 
 # ---------------------------------------------------------------------------
 # Remote (Groq + Gemini) fallback — mirrored from app.py get_chat_response
 # ---------------------------------------------------------------------------
-def get_chat_response(messages: list, temperature: float = 0.7):
+def get_chat_response(
+    messages: list,
+    temperature: float = 0.7,
+    image_bytes: bytes | None = None,
+    image_mime_type: str | None = None,
+):
     """Call Groq first, fall back to Gemini if Groq fails or rate-limits.
+
+    When ``image_bytes`` is provided, Groq is skipped (it does not support
+    vision) and the image is sent directly to Gemini as an ``inline_data``
+    part alongside the last user message's text.
 
     Returns a tuple ``(text, usage)`` where ``usage`` is
     ``{"prompt_tokens": int|None, "completion_tokens": int|None}`` captured
     from the provider's response (used by /api/chat to record token usage).
     """
     import requests as _requests
+    import base64 as _base64
 
     usage: dict = {"prompt_tokens": None, "completion_tokens": None}
 
@@ -161,6 +174,9 @@ def get_chat_response(messages: list, temperature: float = 0.7):
         api_key = os.environ.get("GROQ_API_KEY")
         if not api_key:
             raise ValueError("GROQ_API_KEY not set")
+        # Groq llama-3.3-70b is text-only; images are routed to Gemini.
+        if image_bytes is not None:
+            raise RuntimeError("Groq llama-3.3-70b does not support image input.")
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
             "Content-Type": "application/json",
@@ -189,7 +205,8 @@ def get_chat_response(messages: list, temperature: float = 0.7):
         )
         contents = []
         system_instruction = None
-        for msg in messages:
+        last_idx = len(messages) - 1
+        for i, msg in enumerate(messages):
             role = msg.get("role", "user")
             text = msg.get("content", "")
             if role == "system":
@@ -197,11 +214,26 @@ def get_chat_response(messages: list, temperature: float = 0.7):
                 continue
             if role == "assistant":
                 role = "model"
-            contents.append({"role": role, "parts": [{"text": text}]})
+            parts = [{"text": text}]
+            # Attach image to the last user message (if provided).
+            if (
+                image_bytes is not None
+                and image_mime_type is not None
+                and role == "user"
+                and i == last_idx
+            ):
+                image_b64 = _base64.b64encode(image_bytes).decode("utf-8")
+                parts.insert(0, {
+                    "inline_data": {
+                        "mime_type": image_mime_type,
+                        "data": image_b64,
+                    }
+                })
+            contents.append({"role": role, "parts": parts})
         payload = {"contents": contents}
         if system_instruction:
             payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
-        response = _requests.post(url, json=payload, timeout=20)
+        response = _requests.post(url, json=payload, timeout=ANALYSIS_TIMEOUT)
         if not response.ok:
             raise RuntimeError(f"Gemini {response.status_code}: {response.text[:300]}")
         data = response.json()
@@ -209,6 +241,16 @@ def get_chat_response(messages: list, temperature: float = 0.7):
         usage["prompt_tokens"] = um.get("promptTokenCount")
         usage["completion_tokens"] = um.get("candidatesTokenCount")
         return data["candidates"][0]["content"]["parts"][0]["text"]
+
+    # Vision request: skip Groq (text-only), go straight to Gemini.
+    if image_bytes is not None:
+        try:
+            return call_gemini(), dict(usage)
+        except Exception as e:  # noqa: BLE001
+            print(f"[PROVIDER-FAIL] Gemini (vision): {e}")
+            raise RuntimeError(
+                f"All providers failed. Last error: {_clean_streaming(str(e))}"
+            )
 
     providers = [("Groq", call_groq), ("Gemini", call_gemini)]
     last_error = None
