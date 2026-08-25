@@ -1194,7 +1194,7 @@ async def get_trending(limit: int = 6, user: dict = Depends(get_current_user)):
     if _trending_cache["data"] and (now - _trending_cache["fetched_at"] < _TRENDING_CACHE_TTL):
         return {"topics": _trending_cache["data"][:limit]}
 
-    url = "https://trends.google.com/trends/trendingsearches/daily/rss?geo=IN"
+    url = "https://trends.google.com/trending/rss?geo=IN"
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -1206,16 +1206,23 @@ async def get_trending(limit: int = 6, user: dict = Depends(get_current_user)):
             xml_bytes = resp.content
 
         root = ET.fromstring(xml_bytes)
-        ns = {"ht": "https://trends.google.com/trends/trendingsearches/daily"}
 
         topics = []
         for item in root.findall(".//item"):
-            title_el = item.find("title")
-            traffic_el = item.find("ht:approx_traffic", ns)
-            if title_el is None or not title_el.text:
-                continue
-            traffic_text = traffic_el.text if traffic_el is not None else None
-            topics.append({"label": title_el.text.strip(), "traffic": traffic_text})
+            title = item.findtext("title", default="").strip()
+
+            traffic = ""
+
+            for child in item:
+                if child.tag.endswith("approx_traffic"):
+                    traffic = (child.text or "").strip()
+                    break
+
+            if title:
+                topics.append({
+                    "label": title,
+                    "traffic": traffic,
+                })
 
         _trending_cache["data"] = topics
         _trending_cache["fetched_at"] = now
