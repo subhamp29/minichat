@@ -1194,16 +1194,25 @@ async def get_trending(limit: int = 6, user: dict = Depends(get_current_user)):
     if _trending_cache["data"] and (now - _trending_cache["fetched_at"] < _TRENDING_CACHE_TTL):
         return {"topics": _trending_cache["data"][:limit]}
 
-    url = "https://trends.google.com/trending/rss?geo=IN"
+    url = "https://trends.google.com/trending/rss?geo=IN&gl=IN&hl=en"
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
             resp = await client.get(
                 url,
-                headers={"User-Agent": "Mozilla/5.0"},
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
             )
             resp.raise_for_status()
             xml_bytes = resp.content
+
+            # Diagnostic: ensure we got XML, not an HTML consent page or redirect.
+            content_type = resp.headers.get("content-type", "")
+            if "xml" not in content_type.lower():
+                snippet = xml_bytes[:200].decode("utf-8", errors="replace")
+                raise RuntimeError(
+                    f"Google Trends returned non-XML content-type="
+                    f"{content_type!r}. Body snippet: {snippet!r}"
+                )
 
         root = ET.fromstring(xml_bytes)
 
