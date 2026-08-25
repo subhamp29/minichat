@@ -23,6 +23,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+from PIL import Image
+import io
+
 import jwt
 from jwt.algorithms import ECAlgorithm
 import httpx
@@ -401,6 +404,37 @@ async def _read_image_upload(file: UploadFile) -> tuple[bytes, str]:
     return image_bytes, file.content_type
 
 
+def _normalize_image(file_bytes: bytes) -> tuple[bytes, str]:
+    """Decode, re-encode to clean JPEG, and return (jpeg_bytes, 'image/jpeg').
+
+    This ensures Gemini always receives a standard, well-formed JPEG
+    regardless of the original encoding (WebP, HEIC, PNG with alpha,
+    broken metadata from phone cameras, etc.).
+    """
+    try:
+        image = Image.open(io.BytesIO(file_bytes))
+        image.verify()
+
+        image = Image.open(io.BytesIO(file_bytes))
+        image = image.convert("RGB")
+
+        output = io.BytesIO()
+        image.save(
+            output,
+            format="JPEG",
+            quality=90,
+            optimize=True,
+        )
+
+        return output.getvalue(), "image/jpeg"
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unable to decode uploaded image: {exc}",
+        )
+
+
 def _stream_chat_events(
     conversation_id: str,
     user_message: str,
@@ -570,6 +604,15 @@ def _stream_chat_events(
                 + history_for_prompt
                 + [{"role": "user", "content": augmented_user_msg}]
             )
+
+            if image_bytes is not None:
+                print(
+                    f"[VISION] Sending image: "
+                    f"{len(image_bytes)} bytes, "
+                    f"MIME={image_mime_type}",
+                    flush=True,
+                )
+
             full_text, usage = get_chat_response(
                 api_messages,
                 temperature=temperature,
@@ -679,6 +722,10 @@ async def chat(
             # --- IMAGE ---
             if content_type.startswith("image/"):
                 image_bytes, image_mime_type = await _read_image_upload(file)
+
+                image_bytes, image_mime_type = _normalize_image(
+                    image_bytes
+                )
 
             # --- PDF ---
             elif (
