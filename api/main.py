@@ -1185,8 +1185,19 @@ async def get_stats(user: dict = Depends(get_current_user)):
 _trending_cache: dict = {"data": None, "fetched_at": 0}
 _TRENDING_CACHE_TTL = 600  # 10 minutes
 
+# ---------------------------------------------------------------------------
+
+def _is_english(text: str) -> bool:
+    """Return True if *text* contains only ASCII/Latin characters."""
+    try:
+        text.encode("ascii")
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
 @app.get("/api/trending")
-async def get_trending(limit: int = 6, user: dict = Depends(get_current_user)):
+async def get_trending(limit: int = 6):
     """Return today's trending searches in India, from Google Trends RSS."""
     now = time.time()
 
@@ -1228,10 +1239,23 @@ async def get_trending(limit: int = 6, user: dict = Depends(get_current_user)):
                     break
 
             if title:
+                # Filter to English-language trends only.
+                if not _is_english(title):
+                    continue
                 topics.append({
                     "label": title,
                     "traffic": traffic,
                 })
+
+        # Diagnostic: show how many were filtered.
+        all_items = root.findall(".//item")
+        filtered = len(all_items) - len(topics)
+        if filtered:
+            print(
+                f"[TRENDING] Filtered {filtered} non-English topics "
+                f"({len(all_items)} -> {len(topics)} English)",
+                flush=True,
+            )
 
         _trending_cache["data"] = topics
         _trending_cache["fetched_at"] = now
