@@ -247,21 +247,26 @@ def get_chat_response(
         try:
             return call_gemini(), dict(usage)
         except Exception as e:  # noqa: BLE001
-            print(f"[PROVIDER-FAIL] Gemini (vision): {e}")
+            error_message = f"{type(e).__name__}: {e}"
+            print(f"[CHAT PROVIDER ERROR] Gemini (vision): {error_message}", flush=True)
             raise RuntimeError(
-                f"All providers failed. Last error: {_clean_streaming(str(e))}"
+                f"All providers failed. Details: Gemini: {error_message}"
             )
 
     providers = [("Groq", call_groq), ("Gemini", call_gemini)]
-    last_error = None
+    errors: list[tuple[str, str]] = []
     for name, fn in providers:
         try:
             return fn(), dict(usage)
-        except Exception as e:  # noqa: BLE001
-            print(f"[PROVIDER-FAIL] {name}: {e}")
-            last_error = e
+        except Exception as exc:  # noqa: BLE001
+            error_message = f"{type(exc).__name__}: {exc}"
+            print(f"[CHAT PROVIDER ERROR] {name}: {error_message}", flush=True)
+            errors.append((name, error_message))
             continue
-    raise RuntimeError(f"All providers failed. Last error: {_clean_streaming(str(last_error))}")
+    raise RuntimeError(
+        "All providers failed. Details: "
+        + " | ".join(f"{name}: {error}" for name, error in errors)
+    )
 
 
 # ---------------------------------------------------------------------------
