@@ -1189,14 +1189,21 @@ _TRENDING_CACHE_TTL = 600  # 10 minutes
 async def get_trending(limit: int = 6, user: dict = Depends(get_current_user)):
     """Return today's trending searches in India, from Google Trends RSS."""
     now = time.time()
+
+    # Return cached data if still fresh (10-minute TTL).
     if _trending_cache["data"] and (now - _trending_cache["fetched_at"] < _TRENDING_CACHE_TTL):
         return {"topics": _trending_cache["data"][:limit]}
 
     url = "https://trends.google.com/trends/trendingsearches/daily/rss?geo=IN"
+
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            xml_bytes = resp.read()
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                url,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            resp.raise_for_status()
+            xml_bytes = resp.content
 
         root = ET.fromstring(xml_bytes)
         ns = {"ht": "https://trends.google.com/trends/trendingsearches/daily"}
@@ -1212,13 +1219,48 @@ async def get_trending(limit: int = 6, user: dict = Depends(get_current_user)):
 
         _trending_cache["data"] = topics
         _trending_cache["fetched_at"] = now
+
+        print(
+            f"[TRENDING] Fetched {len(topics)} topics from Google Trends "
+            f"({len(xml_bytes)} bytes)",
+            flush=True,
+        )
+
         return {"topics": topics[:limit]}
 
-    except Exception:
-        # Fall back to stale cache if available, else empty list
-        if _trending_cache["data"]:
-            return {"topics": _trending_cache["data"][:limit]}
-        return {"topics": []}
+    except httpx.TimeoutException as exc:
+        print(f"[TRENDING] Google feed timeout after 10s: {exc}", flush=True)
+    except httpx.HTTPStatusError as exc:
+        print(
+            f"[TRENDING] Google feed HTTP {exc.response.status_code}: "
+            f"{exc.response.text[:200]}",
+            flush=True,
+        )
+    except ET.ParseError as exc:
+        print(f"[TRENDING] Google feed XML parse error: {exc}", flush=True)
+    except httpx.RequestError as exc:
+        print(
+            f"[TRENDING] Google feed request error: "
+            f"{type(exc).__name__}: {exc}",
+            flush=True,
+        )
+    except Exception as exc:
+        print(
+            f"[TRENDING] Unexpected error: {type(exc).__name__}: {exc}",
+            flush=True,
+        )
+
+    # Fall back to stale cache if available, else empty list.
+    if _trending_cache["data"]:
+        print(
+            f"[TRENDING] Returning stale cache "
+            f"({len(_trending_cache['data'])} topics, "
+            f"age={int(now - _trending_cache['fetched_at'])}s)",
+            flush=True,
+        )
+        return {"topics": _trending_cache["data"][:limit]}
+
+    return {"topics": []}
 
 
 # ---------------------------------------------------------------------------
