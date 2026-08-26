@@ -1,11 +1,10 @@
 # MiniChat (BhavyamAI) — Railway Deployment Guide
 
-This service deploys the MiniChat Streamlit frontend on Railway, configured to call a separately-deployed 9Router backend.
+This service deploys the MiniChat Streamlit frontend on Railway, configured to use the built-in Groq/Gemini cloud models or local GGUF models.
 
 ## Prerequisites
 
 - A Railway account and project.
-- A running 9Router service (also on Railway or elsewhere) exposing an OpenAI-compatible `/v1` endpoint.
 
 ## Railway Environment Variables
 
@@ -13,10 +12,9 @@ Set these in the Railway dashboard under **Settings → Variables**:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `ROUTER_BASE_URL` | **Yes** (for remote models) | Base URL of the 9Router service, e.g. `https://9Router-production.up.railway.app/v1` |
-| `ROUTER_API_KEY` | **Yes** (for remote models) | API key for authenticating with the 9Router service. |
-| `ROUTER_MODELS` | No | Comma-separated list of model slugs the router should expose, e.g. `claude-opus-free,gpt-4o-mini`. If omitted, remote models will not appear in the MiniChat model selector. |
-| `DEFAULT_MODEL_KEY` | No | The model key to select on first load. Must match a key in the model selector. For remote models, use the `Remote: <slug>` format, e.g. `Remote: claude-opus-free`. Defaults to `n8n Orchestrated (Supabase + Router)` if unset. |
+| `GROQ_API_KEY` | No | Groq API key for cloud LLM inference. |
+| `GEMINI_API_KEY` | No | Google Gemini API key (fallback if Groq fails). |
+| `DEFAULT_MODEL_KEY` | No | The model key to select on first load. Must match a key in the model selector. Defaults to `Qwen2.5 0.5B (Q4_K_M) - Ultra Fast` if unset. |
 | `N8N_WEBHOOK_URL` | No | n8n webhook URL if you want to use the n8n orchestration backend. |
 | `SUPABASE_URL` | No | Supabase project URL for n8n orchestration. |
 | `SUPABASE_KEY` | No | Supabase anon/service key for n8n orchestration. |
@@ -42,6 +40,4 @@ No code changes are required to switch between deployments.
 
 ## Troubleshooting
 
-- **"Remote router is not configured"**: Ensure `ROUTER_BASE_URL` and `ROUTER_API_KEY` are set in the Railway dashboard. Redeploy after adding them.
-- **No remote models in the selector**: Ensure `ROUTER_MODELS` is set to a comma-separated list of model slugs.
-- **Model download errors on Railway**: The remote-router path does not download GGUF files. If you see model download errors, make sure the selected model backend is `remote` or `n8n_orchestrated`, not `local_gguf`.
+- **"Model download errors on Railway"**: If you see model download errors, make sure the selected model backend is `n8n_orchestrated`, `groq_gemini`, or `local_gguf`.

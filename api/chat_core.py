@@ -10,8 +10,8 @@ IMPORTANT (transition note):
     here, so the cleaning / DB / model logic below is mirrored verbatim from
     app.py. Once the Streamlit app is retired, app.py should import these
     helpers from this module instead of keeping its own copy.
-  * `router_client.py` and `trust_resolver/` ARE imported and reused directly
-    (no duplication) — they are standalone, importable modules.
+  * `trust_resolver/` is imported and reused directly (no duplication) —
+    it is a standalone, importable module.
 """
 
 from __future__ import annotations
@@ -32,22 +32,16 @@ from dotenv import load_dotenv
 
 # ---------------------------------------------------------------------------
 # Path setup — make the sibling MiniChat modules importable
-# (router_client.py, trust_resolver/) without touching app.py.
+# (trust_resolver/) without touching app.py.
 # ---------------------------------------------------------------------------
 MINICHAT_ROOT = Path(__file__).resolve().parent.parent
 if str(MINICHAT_ROOT) not in sys.path:
     sys.path.insert(0, str(MINICHAT_ROOT))
 
-# Load the same .env the Streamlit app uses (ROUTER_*, GROQ_*, GEMINI_*, ...).
+# Load the same .env the Streamlit app uses (GROQ_*, GEMINI_*, ...).
 load_dotenv(MINICHAT_ROOT / ".env")
 
 # Reuse the existing standalone modules directly (no duplication).
-from router_client import (  # noqa: E402
-    RouterConfigurationError,
-    RouterError,
-    _get_available_models,
-    stream_chat,
-)
 from trust_resolver import TrustConfig, TrustResolver  # noqa: E402
 
 try:
@@ -71,7 +65,7 @@ MODEL_OPTIONS = {
         "backend": "groq_gemini",
         "n_ctx": 8192,
         "template": "phi3",
-        "description": "Primary: Groq llama-3.3-70b | Fallback: Google Gemini 3.5 Flash-Lite",
+        "description": "Primary: Groq compound | Fallback: Google Gemini 2.5 Flash-Lite",
     },
     "Qwen2.5 0.5B (Q4_K_M) - Ultra Fast": {
         "backend": "local_gguf",
@@ -174,16 +168,16 @@ def get_chat_response(
         api_key = os.environ.get("GROQ_API_KEY")
         if not api_key:
             raise ValueError("GROQ_API_KEY not set")
-        # Groq llama-3.3-70b is text-only; images are routed to Gemini.
+        # Groq compound is text-only; images are routed to Gemini.
         if image_bytes is not None:
-            raise RuntimeError("Groq llama-3.3-70b does not support image input.")
+            raise RuntimeError("Groq compound does not support image input.")
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
         }
         payload = {
-            "model": "llama-3.3-70b-versatile",
+            "model": "groq/compound",
             "messages": messages,
             "temperature": temperature,
         }
@@ -731,7 +725,7 @@ def ensure_model(model_key: str):
 def load_model(model_key: str):
     """Load (and cache) a llama-cpp-python model instance for local_gguf models."""
     model_config = MODEL_OPTIONS.get(model_key, {})
-    if model_config.get("backend") in ("remote", "n8n_orchestrated", "groq_gemini"):
+    if model_config.get("backend") in ("n8n_orchestrated", "groq_gemini"):
         return None
 
     if model_key not in MODEL_OPTIONS:

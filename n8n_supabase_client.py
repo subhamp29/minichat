@@ -54,7 +54,7 @@ def send_to_n8n_webhook(
     Args:
         message: The user's input text.
         conversation_id: Unique conversation session ID.
-        model_slug: Model slug identifier passed to router.
+        model_slug: Model slug identifier for the n8n workflow.
         backend: Backend descriptor (default: 'n8n_orchestrated').
         webhook_url: Optional explicit webhook URL override.
         timeout: HTTP request timeout in seconds.

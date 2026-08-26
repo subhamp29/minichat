@@ -4,7 +4,7 @@ Exposes the chat/memory/export/stats logic of the existing Streamlit app
 (app.py) as a standalone HTTP API so a Next.js frontend can consume it.
 All Streamlit-coupled code stays in app.py (untouched); the shared,
 non-Streamlit logic lives in api/chat_core.py, which reuses
-router_client.py and trust_resolver/ directly.
+trust_resolver/ directly.
 
 Run locally:
     uvicorn api.main:app --reload
@@ -81,8 +81,6 @@ from chat_core import (  # noqa: E402
     truncate_text,
     check_trust,
     get_trust_events,
-    RouterConfigurationError,
-    RouterError,
     N8nOrchestrationError,
     _N8N_CLIENT_AVAILABLE,
     send_to_n8n_webhook,
@@ -95,17 +93,10 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# CORS — must come before routes/auth so preflight is handled by middleware,
-# not rejected by the route layer.
+# CORS — allow all origins during local dev. Lock this down before deploying.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://bhavyam-frontend.vercel.app",
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:5173",
-        "http://localhost:8080",
-    ],
+    allow_origin_regex=r"http://localhost:\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -578,55 +569,8 @@ def _stream_chat_events(
 
     history_for_prompt = trim_history(history, SYSTEM_PROMPT, augmented_user_msg, template)
 
-    # ----- remote (router_client.stream_chat) -----
-    if backend == "remote":
-        try:
-            remote_messages = (
-                [{"role": "system", "content": SYSTEM_PROMPT}]
-                + history_for_prompt
-                + [{"role": "user", "content": augmented_user_msg}]
-            )
-            chunks = []
-            for chunk in stream_chat(
-                messages=remote_messages,
-                model_slug=model_slug,
-                temperature=temperature,
-                top_p=top_p,
-                max_tokens=max_tokens,
-                image_bytes=image_bytes,
-                image_mime_type=image_mime_type,
-            ):
-                state["captured_tokens"].append(chunk)
-                chunks.append(chunk)
-
-            if len(chunks) == 1 and chunks[0]:
-                # Single-shot response: emit the cleaned full text as one delta
-                # (no artificial typewriter delay — the frontend can animate).
-                cleaned_full = _clean_streaming(chunks[0])
-                if cleaned_full:
-                    yield {"delta": cleaned_full}
-            else:
-                prev_chunk = ""
-                for chunk in chunks:
-                    if (
-                        prev_chunk
-                        and not prev_chunk.endswith((" ", "\n", "\t"))
-                        and chunk
-                        and not chunk.startswith((" ", "\n", "\t"))
-                    ):
-                        chunk = " " + chunk
-                    prev_chunk = chunk
-                    cleaned_chunk = _clean_streaming(chunk)
-                    if cleaned_chunk:
-                        yield {"delta": cleaned_chunk}
-        except (RouterConfigurationError, RouterError) as exc:
-            state["error_occurred"] = True
-            state["error_message"] = str(exc)
-            emitted_error = True
-            yield {"error": _clean_streaming(str(exc))}
-
     # ----- n8n orchestrated -----
-    elif backend == "n8n_orchestrated":
+    if backend == "n8n_orchestrated":
         if image_bytes is not None:
             yield {"error": "Image input is not supported through n8n orchestration."}
             return

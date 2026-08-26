@@ -1,4 +1,4 @@
-"""Diagnostic and verification script for n8n + Supabase + Router pipeline."""
+"""Diagnostic and verification script for n8n + Supabase orchestration."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from n8n_supabase_client import (
     send_to_n8n_webhook,
     N8nOrchestrationError,
 )
-from router_client import health_check as router_health_check
 
 
 def main():
@@ -27,15 +26,7 @@ def main():
     print(f"   - SUPABASE_URL    : {config['supabase_url'] or '(Not set)'}")
     print(f"   - SUPABASE_KEY    : {'****' + config['supabase_key'][-4:] if config['supabase_key'] else '(Not set)'}")
 
-    # 2. Router Health Check
-    print(f"\n2. Testing LLM Router Connectivity...")
-    r_health = router_health_check(timeout=5)
-    if r_health["ok"]:
-        print(f"   [+] Router reachable: {r_health['message']}")
-    else:
-        print(f"   [!] Router check warning: {r_health['message']}")
-
-    # 3. Supabase REST Check
+    # 2. Supabase REST Check
     print(f"\n3. Testing Supabase REST API Connection...")
     if config["supabase_url"] and config["supabase_key"] and "your-project" not in config["supabase_url"]:
         try:

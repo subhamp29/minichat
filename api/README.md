@@ -6,11 +6,10 @@ frontend can consume it. This is an **additive** change: `app.py` is
 untouched and still runnable.
 
 The shared, non-Streamlit logic lives in [`chat_core.py`](./chat_core.py)
-and reuses the existing standalone modules (`router_client.py`,
-`trust_resolver/`) directly — no duplication of the routing/trust logic.
-Message cleaning, SQLite persistence, local-GGUF loading, and the Groq/Gemini
-fallback are mirrored from `app.py` so behaviour stays identical during the
-migration.
+and reuses the existing standalone modules (`trust_resolver/`) directly — no
+duplication of the trust logic. Message cleaning, SQLite persistence,
+local-GGUF loading, and the Groq/Gemini fallback are mirrored from `app.py`
+so behaviour stays identical during the migration.
 
 ## Run locally
 
@@ -41,7 +40,7 @@ List available models (same source as `MODEL_OPTIONS` in `app.py`).
   {
     "id": "Groq + Gemini Fallback (Cloud)",
     "display_name": "Groq + Gemini Fallback (Cloud)",
-    "backend": "remote",
+    "backend": "cloud",
     "description": "Primary: Groq llama-3.3-70b | Fallback: Google Gemini 3.5 Flash-Lite"
   },
   {
@@ -52,7 +51,7 @@ List available models (same source as `MODEL_OPTIONS` in `app.py`).
   }
 ]
 ```
-`backend` is coarse: `local` for GGUF models, `remote` for cloud/routed ones.
+`backend` is coarse: `local` for GGUF models, `cloud` for cloud-based ones.
 
 ### 2. `GET /api/conversations`
 List saved conversations, newest first.
@@ -108,11 +107,11 @@ Delete a conversation (mirrors "New Chat" / delete in `app.py`).
 `404` if not found.
 
 ### 6. `POST /api/chat`
-Stream the assistant reply as **Server-Sent Events**. Reuses
-`router_client.stream_chat` for remote models and the llama-cpp-python
-generator for local GGUF; applies the same per-chunk `_clean_streaming`
-sanitization and final `clean_response` cleanup as `app.py`, and persists the
-full exchange to `chat_history.db` once streaming completes.
+Stream the assistant reply as **Server-Sent Events**. Reuses the Groq/Gemini
+fallback for cloud models and the llama-cpp-python generator for local GGUF;
+applies the same per-chunk `_clean_streaming` sanitization and final
+`clean_response` cleanup as `app.py`, and persists the full exchange to
+`chat_history.db` once streaming completes.
 
 **Request body**:
 ```json
@@ -135,7 +134,7 @@ data: {"done": true, "conversation_id": "f47ac10b-...", "model_id": "..."}
 ```
 On error:
 ```
-data: {"error": "Remote router is not configured. Set the ROUTER_BASE_URL environment variable."}
+data: {"error": "..."}
 ```
 > The client should accumulate `delta` chunks to render the answer, and treat
 > a `done` event as the end of the stream (the exchange is already saved), or

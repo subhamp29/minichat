@@ -1,9 +1,10 @@
+import os
 import time, requests
 
 time.sleep(2)
 
-KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFmZ2VzanlsemprbHBqcWp0ZWpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY5NjI1NzIsImV4cCI6MjEwMjUzODU3Mn0.uc_TXdbOKsmduFCCj_cilhALfRXb2PtXSUn5A7jvwUY"
-SUPA = "https://afgesjylzjklpjqjtejq.supabase.co"
+KEY = os.environ.get("SUPABASE_KEY", "")
+SUPA = os.environ.get("SUPABASE_URL", "").rstrip("/")
 HEADERS = {"apikey": KEY, "Authorization": "Bearer " + KEY, "Content-Type": "application/json"}
 CONV_ID = "verify-end-to-end-001"
 

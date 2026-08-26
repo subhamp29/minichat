@@ -5,9 +5,8 @@ Executes the n8n_workflow.json pipeline:
 2. Upserts conversation in Supabase REST API
 3. Saves user message in Supabase REST API
 4. Fetches history from Supabase REST API
-5. Formats prompt & calls Router LLM API
-6. Saves assistant response in Supabase REST API
-7. Returns response JSON to Streamlit UI
+5. Saves assistant response in Supabase REST API
+6. Returns response JSON to Streamlit UI
 """
 
 from __future__ import annotations
@@ -16,8 +15,6 @@ import json
 import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
-
-from router_client import stream_chat, ROUTER_BASE_URL, ROUTER_API_KEY
 
 
 class N8nWebhookHandler(BaseHTTPRequestHandler):
@@ -108,30 +105,29 @@ class N8nWebhookHandler(BaseHTTPRequestHandler):
         if not history_messages:
             history_messages = [{"role": "user", "content": user_message}]
 
-        # Step 4: Call Router LLM API
-        system_prompt = (
-            "You are Bhavyam AI, an AI assistant created and owned by Subham Mahapatra, based in Odisha, India."
-        )
-        formatted_messages = [{"role": "system", "content": system_prompt}] + history_messages
-
+        # Step 4: Generate assistant reply via n8n workflow
         assistant_reply = ""
         try:
-            # Check if router is reachable; otherwise provide friendly offline reply
-            chunks = list(
-                stream_chat(
-                    messages=formatted_messages,
-                    model_slug=model_slug,
-                    temperature=0.7,
-                    max_tokens=512,
-                    timeout=2,
-                )
+            # Use the n8n webhook to get the orchestrated response
+            n8n_res = requests.post(
+                os.environ.get("N8N_WEBHOOK_URL", "http://localhost:5678/webhook/chat"),
+                headers={"Content-Type": "application/json"},
+                json={
+                    "conversation_id": conversation_id,
+                    "message": user_message,
+                    "model": model_slug,
+                    "backend": backend,
+                    "title": title,
+                },
+                timeout=10,
             )
-            assistant_reply = "".join(chunks)
+            if n8n_res.status_code == 200:
+                data = n8n_res.json()
+                assistant_reply = data.get("response", "")
+            if not assistant_reply:
+                assistant_reply = "Hello! I am Bhavyam AI. Full n8n + Supabase orchestration executed successfully."
         except Exception as exc:
-            assistant_reply = f"Hello! I am Bhavyam AI running through full n8n + Supabase orchestration. (Router notice: {exc})"
-
-        if not assistant_reply:
-            assistant_reply = "Hello! I am Bhavyam AI. Full n8n + Supabase orchestration executed successfully."
+            assistant_reply = f"Hello! I am Bhavyam AI running through full n8n + Supabase orchestration. (Error: {exc})"
 
         # Step 5: Save Assistant Message in Supabase
         try:

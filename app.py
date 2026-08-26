@@ -18,12 +18,6 @@ from llama_cpp import Llama
 from dotenv import load_dotenv
 
 load_dotenv()
-from router_client import (
-    RouterConfigurationError,
-    RouterError,
-    _get_available_models,
-    stream_chat,
-)
 
 # ---------------------------------------------------------------------------
 # Groq + Gemini fallback chat completion
@@ -43,7 +37,7 @@ def get_chat_response(messages: str) -> str:
             "Authorization": f"Bearer {api_key}",
         }
         payload = {
-            "model": "llama-3.3-70b-versatile",
+            "model": "groq/compound",
             "messages": messages,
             "temperature": 0.7,
         }
@@ -119,7 +113,7 @@ MODEL_OPTIONS = {
         "backend": "groq_gemini",
         "n_ctx": 8192,
         "template": "phi3",
-        "description": "Primary: Groq llama-3.3-70b | Fallback: Google Gemini 3.5 Flash-Lite",
+        "description": "Primary: Groq compound | Fallback: Google Gemini 2.5 Flash-Lite",
     },
     "Qwen2.5 0.5B (Q4_K_M) - Ultra Fast": {
         "backend": "local_gguf",
@@ -1869,7 +1863,7 @@ def ensure_model(model_key: str):
 def load_model(model_key: str):
     # Remote & n8n models don't need a local Llama instance.
     model_config = MODEL_OPTIONS.get(model_key, {})
-    if model_config.get("backend") in ("remote", "n8n_orchestrated", "groq_gemini"):
+    if model_config.get("backend") in ("n8n_orchestrated", "groq_gemini"):
         return None
 
     # Safety check: if model_key is invalid or missing, default
@@ -1979,33 +1973,9 @@ if "selected_model" not in st.session_state:
 
 # NOTE: We intentionally do NOT auto-switch st.session_state.selected_model
 # here anymore. Doing so on every rerun (even gated by a "done" flag) meant
-# that selecting a remote model, which itself triggers a rerun, immediately
-# got silently overwritten back to a local model before the selectbox could
+# that selecting a model, which itself triggers a rerun, immediately
+# got silently overwritten back to another model before the selectbox could
 # redraw — visible to the user as the selector "flickering" back and forth.
-#
-# Instead: just show a non-destructive warning if the router isn't
-# configured for the currently selected remote model. The user's selection
-# is left alone. Actual failures are handled gracefully at send-time (see
-# the RouterConfigurationError / RouterError handling further below), which
-# already offers a one-click "Switch to local for this turn" button.
-if st.session_state.selected_model in MODEL_OPTIONS:
-    model_cfg = MODEL_OPTIONS[st.session_state.selected_model]
-    if model_cfg.get("backend") == "remote":
-        missing = []
-        if not os.environ.get("ROUTER_BASE_URL"):
-            missing.append("ROUTER_BASE_URL")
-        if not os.environ.get("ROUTER_API_KEY"):
-            missing.append("ROUTER_API_KEY")
-        if missing:
-            st.session_state.fallback_notice = (
-                f"⚠️ Router not fully configured (missing: {', '.join(missing)}). "
-                f"'{st.session_state.selected_model}' will fail when you send a message. "
-                f"Set {', '.join(missing)} in Railway → Settings → Variables, or switch "
-                f"to a local model in the sidebar."
-            )
-        elif (st.session_state.get("fallback_notice") or "").startswith("⚠️ Router not fully configured"):
-            # Clear a stale router-missing notice once env vars are present.
-            st.session_state.fallback_notice = None
 
 if "last_error" not in st.session_state:
     st.session_state.last_error = None
@@ -2604,58 +2574,7 @@ if user_input := user_input.strip() if isinstance(user_input, str) else None:
         "error_message": "",
     }
 
-    if backend == "remote":
-        def streaming_generator():
-            """Yield tokens from the remote router while capturing them."""
-            state = st.session_state._stream_state
-            try:
-                remote_messages = (
-                    [{"role": "system", "content": SYSTEM_PROMPT}]
-                    + history_for_prompt
-                    + [{"role": "user", "content": augmented_user_msg}]
-                )
-                chunks = []
-                for chunk in stream_chat(
-                    messages=remote_messages,
-                    model_slug=model_slug,
-                    temperature=temperature,
-                    top_p=top_p,
-                    max_tokens=max_tokens_slider,
-                ):
-                    state["captured_tokens"].append(chunk)
-                    chunks.append(chunk)
-
-                if len(chunks) == 1 and chunks[0]:
-                    # Router returned the whole response in one shot.
-                    # Reveal it progressively as a typewriter effect.
-                    full_text = chunks[0]
-                    words = full_text.split(" ")
-                    for word in words:
-                        piece = word + " "
-                        cleaned_piece = _clean_streaming(piece)
-                        if cleaned_piece:
-                            yield cleaned_piece
-                        time.sleep(0.03)
-                else:
-                    # Real streaming: preserve spacing between chunks
-                    prev_chunk = ""
-                    for chunk in chunks:
-                        if (
-                            prev_chunk
-                            and not prev_chunk.endswith((" ", "\n", "\t"))
-                            and chunk
-                            and not chunk.startswith((" ", "\n", "\t"))
-                        ):
-                            chunk = " " + chunk
-                        prev_chunk = chunk
-                        cleaned_chunk = _clean_streaming(chunk)
-                        if cleaned_chunk:
-                            yield cleaned_chunk
-            except (RouterConfigurationError, RouterError) as exc:
-                state["error_occurred"] = True
-                state["error_message"] = str(exc)
-                yield _clean_streaming(str(exc))
-    elif backend == "n8n_orchestrated":
+    if backend == "n8n_orchestrated":
         def streaming_generator():
             """Send message to n8n webhook and yield response."""
             if not _N8N_CLIENT_AVAILABLE:
@@ -2818,26 +2737,7 @@ if user_input := user_input.strip() if isinstance(user_input, str) else None:
     else:
         # Handle generation error with enhanced UI
         cleaned_token = clean_response(error_message)
-        if backend == "remote":
-            st.error(f"Remote router unavailable: {cleaned_token}")
-            # Offer a one-click fallback to a local GGUF model for this turn.
-            local_fallback_key = "Qwen2.5 0.5B (Q4_K_M) - Ultra Fast"
-            if (
-                local_fallback_key in MODEL_OPTIONS
-                and MODEL_OPTIONS[local_fallback_key].get("backend") == "local_gguf"
-                and st.session_state.selected_model != local_fallback_key
-            ):
-                if st.button(
-                    f"Switch to {local_fallback_key} for this turn",
-                    key="remote_fallback_btn",
-                ):
-                    st.session_state.retry_prompt = user_input
-                    st.session_state.selected_model = local_fallback_key
-                    st.session_state.fallback_notice = (
-                        f"Switched to {local_fallback_key} due to remote router unavailability."
-                    )
-                    st.rerun()
-        elif "does not support image input" in cleaned_token or "Cannot read" in cleaned_token:
+        if "does not support image input" in cleaned_token or "Cannot read" in cleaned_token:
             error_msg = (
                 "⚠️ **Image input is not supported**\n\n"
                 "Bhavyam AI currently runs local text-only models and cannot read images. "
