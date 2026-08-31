@@ -93,10 +93,11 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# CORS — allow all origins during local dev. Lock this down before deploying.
+# CORS — allow localhost dev origins plus common hosting providers.
+# Lock this down to your exact frontend origin(s) before deploying to production.
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"http://localhost:\d+",
+    allow_origin_regex=r"(http|https|tauri|capacitor)://(localhost(:\d+)?|.*\.vercel\.app|.*\.railway\.app|.*\.netlify\.site|.*\.pages\.dev)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
